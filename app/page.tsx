@@ -10,6 +10,7 @@ export default function Home() {
       color: "#1f2937",
       fontSize: "1.8rem"
     }}>
+      Previsão do Tempo:
       Dia ensolarado; sem nuvens.
     </main>
   );
