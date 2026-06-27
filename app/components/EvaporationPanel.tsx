@@ -12,15 +12,19 @@ type LocalIdea = {
 
 const STORAGE_KEY = "nuvem-digital-local-ideas";
 
-export default function EvaporationPage() {
+export default function EvaporationPanel() {
   const [text, setText] = useState("");
   const [ideas, setIdeas] = useState<LocalIdea[]>([]);
 
   useEffect(() => {
     const stored = localStorage.getItem(STORAGE_KEY);
 
-    if (stored) {
+    if (!stored) return;
+
+    try {
       setIdeas(JSON.parse(stored));
+    } catch {
+      localStorage.removeItem(STORAGE_KEY);
     }
   }, []);
 
@@ -55,8 +59,8 @@ export default function EvaporationPage() {
         <h1>Envie uma nova ideia</h1>
 
         <p>
-          As ideias ficam registradas nesta máquina e, na próxima etapa, serão
-          enviadas ao Firebase para aprovação no Sky.
+          Digite uma palavra ou ideia curta. Nesta primeira versão, as ideias
+          ficam salvas apenas nesta máquina.
         </p>
 
         <form onSubmit={handleSubmit} className="idea-form">
