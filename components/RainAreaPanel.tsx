@@ -9,7 +9,7 @@ import {
   listenWords,
 } from "@/lib/firebase/cloudService";
 
-function getWeatherStatus(totalWords: number) {
+function getWeatherStatus(totalWords: number, uniqueWords: number) {
   if (totalWords === 0) return "Sem ideias";
   if (totalWords < 5) return "Nublado";
   if (totalWords < 15) return "Chuva de ideias";
@@ -29,47 +29,22 @@ function hashString(value: string) {
   return Math.abs(hash);
 }
 
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function getWordLayout(word: FirebaseWord, index: number, total: number) {
+function getWordLayout(word: FirebaseWord, index: number) {
   const hash = hashString(word.id);
-
-  const columns = total <= 8 ? 4 : total <= 18 ? 6 : 8;
-  const rows = Math.max(1, Math.ceil(total / columns));
-
-  const column = index % columns;
-  const row = Math.floor(index / columns);
-
-  const baseX = ((column + 0.5) / columns) * 100;
-  const baseY = 12 + ((row + 0.5) / rows) * 72;
-
-  const jitterX = ((hash % 100) / 100 - 0.5) * 8;
-  const jitterY = (((hash >> 3) % 100) / 100 - 0.5) * 6;
-
-  const rotate =
-    hash % 11 === 0
-      ? 90
-      : hash % 13 === 0
-        ? -90
-        : ((hash % 9) - 4) * 1.5;
-
-  const scale = Math.min(3.4, 0.9 + word.count * 0.22);
-  const side = column < columns / 2 ? -1 : 1;
-  const sway = 8 + (hash % 16);
-  const lift = -8 - (hash % 10);
-  const delay = -((hash % 40) / 10);
+  const x = 8 + ((hash + index * 19) % 78);
+  const y = 18 + ((hash * 3 + index * 23) % 58);
+  const rotate = hash % 7 === 0 ? 90 : hash % 9 === 0 ? -90 : (hash % 9) - 4;
+  const scale = Math.min(3.2, 0.9 + word.count * 0.22);
+  const delay = -((hash % 30) / 10);
+  const drift = hash % 2 === 0 ? 1 : -1;
 
   return {
-    x: clamp(baseX + jitterX, 8, 92),
-    y: clamp(baseY + jitterY, 12, 88),
+    x,
+    y,
     rotate,
     scale,
-    side,
-    sway,
-    lift,
     delay,
+    drift,
   };
 }
 
@@ -93,8 +68,13 @@ export default function RainAreaPanel() {
       return;
     }
 
-    const unsubscribeCloud = listenCloud(activeCloudId, setActiveCloud);
-    const unsubscribeWords = listenWords(activeCloudId, setWords);
+    const unsubscribeCloud = listenCloud(activeCloudId, (cloud) => {
+      setActiveCloud(cloud);
+    });
+
+    const unsubscribeWords = listenWords(activeCloudId, (nextWords) => {
+      setWords(nextWords);
+    });
 
     return () => {
       unsubscribeCloud();
@@ -102,13 +82,17 @@ export default function RainAreaPanel() {
     };
   }, [activeCloudId]);
 
+  const totalWords = words.reduce<number>(
+    (total, word) => total + word.count,
+    0
+  );
+
+  const weather = getWeatherStatus(totalWords, words.length);
+
   const sortedWords = useMemo(
     () => [...words].sort((a, b) => b.count - a.count),
     [words]
   );
-
-  const totalWords = words.reduce((total, word) => total + word.count, 0);
-  const weather = getWeatherStatus(totalWords);
 
   if (!activeCloudId || !activeCloud) {
     return (
@@ -122,33 +106,33 @@ export default function RainAreaPanel() {
   }
 
   return (
-    <main className="rain-stage free-rain-stage">
+    <main className="rain-stage">
       <header className="rain-overlay-header">
         <p>{activeCloud.title}</p>
         <h1>{activeCloud.publicTitle}</h1>
       </header>
 
-      <section className="free-rain-field" aria-label="Ideias em precipitação">
+      <section className="organic-cloud" aria-label="Nuvem de palavras">
+        <div className="cloud-glow" />
+
         {sortedWords.length === 0 ? (
           <p className="empty-rain-message">Aguardando as primeiras ideias...</p>
         ) : (
           sortedWords.map((word, index) => {
-            const layout = getWordLayout(word, index, sortedWords.length);
+            const layout = getWordLayout(word, index);
 
             return (
               <span
                 key={word.id}
-                className="rain-word-free"
+                className="rain-word"
                 style={
                   {
                     "--x": `${layout.x}%`,
                     "--y": `${layout.y}%`,
                     "--rotation": `${layout.rotate}deg`,
                     "--scale": layout.scale,
-                    "--side": layout.side,
-                    "--sway": `${layout.sway}px`,
-                    "--lift": `${layout.lift}px`,
                     "--delay": `${layout.delay}s`,
+                    "--drift": layout.drift,
                   } as React.CSSProperties
                 }
               >
