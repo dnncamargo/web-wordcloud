@@ -45,9 +45,16 @@ export function listenGlobalSettings(callback: (activeCloudId: string | null) =>
 }
 
 export function listenClouds(callback: (clouds: FirebaseCloud[]) => void) {
-  return onSnapshot(query(collection(db, "clouds"), orderBy("createdAt", "desc")), (snapshot) => {
-    callback(
-      snapshot.docs.map((document) => {
+  return onSnapshot(collection(db, "clouds"), (snapshot) => {
+    const statusOrder: Record<FirebaseCloud["status"], number> = {
+      open: 0,
+      draft: 1,
+      closed: 2,
+      archived: 3,
+    };
+
+    const clouds = snapshot.docs
+      .map((document) => {
         const data = document.data();
 
         return {
@@ -55,9 +62,17 @@ export function listenClouds(callback: (clouds: FirebaseCloud[]) => void) {
           title: String(data.title ?? ""),
           publicTitle: String(data.publicTitle ?? ""),
           status: data.status ?? "draft",
-        };
+        } as FirebaseCloud;
       })
-    );
+      .sort((a, b) => {
+        const statusDifference = statusOrder[a.status] - statusOrder[b.status];
+
+        if (statusDifference !== 0) return statusDifference;
+
+        return a.title.localeCompare(b.title, "pt-BR");
+      });
+
+    callback(clouds);
   });
 }
 
@@ -125,35 +140,67 @@ export async function createCloud() {
     publicTitle: "Digite a pergunta investigadora",
     status: "draft",
     createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   });
 
   return cloudRef.id;
 }
 
 export async function activateCloud(cloudId: string) {
+  const settingsRef = doc(db, "settings", "global");
+  const settingsSnapshot = await getDoc(settingsRef);
+  const previousActiveCloudId = settingsSnapshot.data()?.activeCloudId ?? null;
+
+  if (previousActiveCloudId && previousActiveCloudId !== cloudId) {
+    await updateDoc(doc(db, "clouds", previousActiveCloudId), {
+      status: "closed",
+      closedAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  }
+
   await updateDoc(doc(db, "clouds", cloudId), {
     status: "open",
     activatedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   });
 
-  await setDoc(doc(db, "settings", "global"), {
-    activeCloudId: cloudId,
-  });
+  await setDoc(
+    settingsRef,
+    {
+      activeCloudId: cloudId,
+    },
+    { merge: true }
+  );
 }
 
 export async function archiveCloud(cloudId: string) {
   await updateDoc(doc(db, "clouds", cloudId), {
     status: "archived",
     archivedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
   });
 
-  const settingsSnapshot = await getDoc(doc(db, "settings", "global"));
+  const settingsRef = doc(db, "settings", "global");
+  const settingsSnapshot = await getDoc(settingsRef);
 
   if (settingsSnapshot.data()?.activeCloudId === cloudId) {
-    await setDoc(doc(db, "settings", "global"), {
-      activeCloudId: null,
-    });
+    await setDoc(
+      settingsRef,
+      {
+        activeCloudId: null,
+      },
+      { merge: true }
+    );
   }
+}
+
+export async function unarchiveCloud(cloudId: string) {
+  await updateDoc(doc(db, "clouds", cloudId), {
+    status: "closed",
+    unarchivedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
 }
 
 export async function updateCloudText(

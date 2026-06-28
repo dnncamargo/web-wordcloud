@@ -16,24 +16,41 @@ import {
   listenWords,
   mergeNewWordIntoWord,
   rejectNewWord,
+  unarchiveCloud,
   updateCloudText,
   updateWordText,
 } from "@/lib/firebase/cloudService";
 
+function getStatusLabel(status: FirebaseCloud["status"]) {
+  if (status === "open") return "aberta";
+  if (status === "draft") return "rascunho";
+  if (status === "closed") return "fechada";
+  return "arquivada";
+}
+
 export default function SkyPanel() {
   const [clouds, setClouds] = useState<FirebaseCloud[]>([]);
   const [activeCloudId, setActiveCloudId] = useState<string | null>(null);
+  const [selectedCloudId, setSelectedCloudId] = useState<string | null>(null);
   const [words, setWords] = useState<FirebaseWord[]>([]);
   const [newWords, setNewWords] = useState<FirebaseNewWord[]>([]);
   const [titleDraft, setTitleDraft] = useState("");
   const [questionDraft, setQuestionDraft] = useState("");
   const [feedback, setFeedback] = useState("");
 
-  const activeCloud = clouds.find((cloud) => cloud.id === activeCloudId) ?? null;
+  const selectedCloud =
+    clouds.find((cloud) => cloud.id === selectedCloudId) ?? null;
 
   useEffect(() => {
     const unsubscribeClouds = listenClouds(setClouds);
-    const unsubscribeSettings = listenGlobalSettings(setActiveCloudId);
+    const unsubscribeSettings = listenGlobalSettings((cloudId) => {
+      setActiveCloudId(cloudId);
+
+      setSelectedCloudId((currentSelectedId) => {
+        if (currentSelectedId) return currentSelectedId;
+        return cloudId;
+      });
+    });
 
     return () => {
       unsubscribeClouds();
@@ -42,67 +59,99 @@ export default function SkyPanel() {
   }, []);
 
   useEffect(() => {
-    if (!activeCloudId) {
+    if (selectedCloudId) return;
+
+    const firstAvailableCloud = clouds[0];
+
+    if (firstAvailableCloud) {
+      setSelectedCloudId(firstAvailableCloud.id);
+    }
+  }, [clouds, selectedCloudId]);
+
+  useEffect(() => {
+    if (!selectedCloudId) {
       setWords([]);
       setNewWords([]);
       return;
     }
 
-    const unsubscribeWords = listenWords(activeCloudId, setWords);
-    const unsubscribeNewWords = listenNewWords(activeCloudId, setNewWords);
+    const unsubscribeWords = listenWords(selectedCloudId, setWords);
+    const unsubscribeNewWords = listenNewWords(selectedCloudId, setNewWords);
 
     return () => {
       unsubscribeWords();
       unsubscribeNewWords();
     };
-  }, [activeCloudId]);
+  }, [selectedCloudId]);
 
   useEffect(() => {
-    setTitleDraft(activeCloud?.title ?? "");
-    setQuestionDraft(activeCloud?.publicTitle ?? "");
-  }, [activeCloud?.id, activeCloud?.title, activeCloud?.publicTitle]);
+    setTitleDraft(selectedCloud?.title ?? "");
+    setQuestionDraft(selectedCloud?.publicTitle ?? "");
+  }, [selectedCloud?.id, selectedCloud?.title, selectedCloud?.publicTitle]);
 
   async function handleCreateCloud() {
     const id = await createCloud();
-    await activateCloud(id);
-    setFeedback("Nova nuvem criada.");
+
+    setSelectedCloudId(id);
+    setFeedback("Rascunho criado. Edite e ative quando estiver pronto.");
+  }
+
+  async function handleActivateCloud(cloudId: string) {
+    await activateCloud(cloudId);
+
+    setSelectedCloudId(cloudId);
+    setFeedback("Nuvem ativada.");
+  }
+
+  async function handleArchiveCloud(cloudId: string) {
+    await archiveCloud(cloudId);
+
+    setSelectedCloudId(cloudId);
+    setFeedback("Nuvem arquivada.");
+  }
+
+  async function handleUnarchiveCloud(cloudId: string) {
+    await unarchiveCloud(cloudId);
+
+    setSelectedCloudId(cloudId);
+    setFeedback("Nuvem desarquivada.");
   }
 
   async function saveCloudField(field: "title" | "publicTitle", value: string) {
-    if (!activeCloudId || !activeCloud) return;
+    if (!selectedCloudId || !selectedCloud) return;
 
     const cleanValue = value.trim();
 
     if (!cleanValue) return;
 
     const currentValue =
-      field === "title" ? activeCloud.title : activeCloud.publicTitle;
+      field === "title" ? selectedCloud.title : selectedCloud.publicTitle;
 
     if (cleanValue === currentValue) return;
 
-    await updateCloudText(activeCloudId, field, cleanValue);
+    await updateCloudText(selectedCloudId, field, cleanValue);
     setFeedback("Nuvem atualizada.");
   }
 
   async function handleMerge(newWord: FirebaseNewWord, targetWordId: string) {
-    if (!activeCloudId || !targetWordId) return;
+    if (!selectedCloudId || !targetWordId) return;
 
     const targetWord = words.find((word) => word.id === targetWordId);
 
     if (!targetWord) return;
 
-    await mergeNewWordIntoWord(activeCloudId, newWord, targetWord);
+    await mergeNewWordIntoWord(selectedCloudId, newWord, targetWord);
     setFeedback(`"${newWord.text}" foi mesclada com "${targetWord.text}".`);
   }
 
   async function handleUpdateAcceptedWord(word: FirebaseWord, value: string) {
-    if (!activeCloudId) return;
+    if (!selectedCloudId) return;
 
     const cleanValue = value.trim();
 
     if (!cleanValue || cleanValue === word.text) return;
 
-    await updateWordText(activeCloudId, word, cleanValue);
+    await updateWordText(selectedCloudId, word, cleanValue);
     setFeedback("Palavra atualizada.");
   }
 
@@ -110,22 +159,20 @@ export default function SkyPanel() {
     <main className="sky-clean">
       <aside className="sky-clean-column sky-clouds-column">
         <header className="sky-clean-header">
-          <div>
-            <span>Sky</span>
-            <h1>Gerenciamento do céu</h1>
-          </div>
+          <h1>Gerenciamento do Céu</h1>
 
-          <button className="primary-clean-button" onClick={handleCreateCloud}>
-            Nova
+          <button className="button" onClick={handleCreateCloud}>
+            +
           </button>
         </header>
 
-        <section className="clean-list">
+        <section className="column-scroll-body clean-list">
           {clouds.length === 0 ? (
             <p className="clean-empty">Nenhuma nuvem criada.</p>
           ) : (
             clouds.map((cloud) => {
               const isActive = cloud.id === activeCloudId;
+              const isSelected = cloud.id === selectedCloudId;
               const isArchived = cloud.status === "archived";
 
               return (
@@ -133,33 +180,52 @@ export default function SkyPanel() {
                   key={cloud.id}
                   className={[
                     "clean-cloud-item",
+                    isSelected ? "selected" : "",
                     isActive ? "active" : "",
                     isArchived ? "archived" : "",
                   ].join(" ")}
                 >
                   <button
                     className="cloud-name-button"
-                    onClick={() => !isArchived && activateCloud(cloud.id)}
-                    disabled={isArchived}
+                    onClick={() => setSelectedCloudId(cloud.id)}
                   >
                     <strong>{cloud.title || "Sem título"}</strong>
+
                     <small>
                       {isActive
-                        ? "ativa"
-                        : isArchived
-                          ? "arquivada"
-                          : "inativa"}
+                        ? "ativa na chuva"
+                        : getStatusLabel(cloud.status)}
                     </small>
                   </button>
 
-                  {isActive && (
-                    <button
-                      className="ghost-danger-button"
-                      onClick={() => archiveCloud(cloud.id)}
-                    >
-                      arquivar
-                    </button>
-                  )}
+                  <div className="cloud-row-actions">
+                    {!isActive && !isArchived && (
+                      <button
+                        className="button"
+                        onClick={() => handleActivateCloud(cloud.id)}
+                      >
+                        ativar
+                      </button>
+                    )}
+
+                    {isActive && (
+                      <button
+                        className="button"
+                        onClick={() => handleArchiveCloud(cloud.id)}
+                      >
+                        arquivar
+                      </button>
+                    )}
+
+                    {isArchived && (
+                      <button
+                        className="button"
+                        onClick={() => handleUnarchiveCloud(cloud.id)}
+                      >
+                        unarchive
+                      </button>
+                    )}
+                  </div>
                 </article>
               );
             })
@@ -168,7 +234,7 @@ export default function SkyPanel() {
       </aside>
 
       <section className="sky-clean-column sky-current-column">
-        {activeCloud ? (
+        {selectedCloud ? (
           <>
             <header className="current-cloud-clean-header">
               <input
@@ -195,11 +261,11 @@ export default function SkyPanel() {
                 <span>{words.length}</span>
               </div>
 
-              {words.length === 0 ? (
-                <p className="clean-empty">Nenhuma palavra aceita ainda.</p>
-              ) : (
-                <div className="accepted-clean-list">
-                  {words.map((word) => (
+              <div className="column-scroll-body accepted-clean-list">
+                {words.length === 0 ? (
+                  <p className="clean-empty">Nenhuma palavra aceita ainda.</p>
+                ) : (
+                  words.map((word) => (
                     <article key={word.id} className="accepted-clean-word">
                       <input
                         defaultValue={word.text}
@@ -218,22 +284,23 @@ export default function SkyPanel() {
                       )}
 
                       <button
-                        className="ghost-danger-button"
-                        onClick={() => deleteWord(activeCloud.id, word.id)}
+                        className="button"
+                        onClick={() => deleteWord(selectedCloud.id, word.id)}
                       >
                         remover
                       </button>
                     </article>
-                  ))}
-                </div>
-              )}
+                  ))
+                )}
+              </div>
             </section>
           </>
         ) : (
           <section className="clean-empty-state">
             <h2>Dia ensolarado.</h2>
-            <p>Nenhuma nuvem ativa no momento.</p>
-            <button className="primary-clean-button" onClick={handleCreateCloud}>
+            <p>Nenhuma nuvem selecionada.</p>
+
+            <button className="button" onClick={handleCreateCloud}>
               Criar nuvem
             </button>
           </section>
@@ -246,24 +313,30 @@ export default function SkyPanel() {
           <span>{newWords.length}</span>
         </div>
 
-        {!activeCloudId ? (
-          <p className="clean-empty">Ative uma nuvem para receber ideias.</p>
-        ) : newWords.length === 0 ? (
-          <p className="clean-empty">Nenhuma ideia pendente.</p>
-        ) : (
-          <div className="new-clean-list">
-            {newWords.map((word) => (
+        <div className="column-scroll-body new-clean-list">
+          {!selectedCloudId ? (
+            <p className="clean-empty">Selecione uma nuvem.</p>
+          ) : newWords.length === 0 ? (
+            <p className="clean-empty">Nenhuma ideia pendente.</p>
+          ) : (
+            newWords.map((word) => (
               <article key={word.id} className="new-clean-word">
                 <strong>{word.text}</strong>
 
                 <div className="clean-action-row">
                   <button
-                    onClick={() => approveNewWord(activeCloudId, word.id, word.text)}
+                    className="button"
+                    onClick={() =>
+                      approveNewWord(selectedCloudId, word.id, word.text)
+                    }
                   >
                     aceitar
                   </button>
 
-                  <button onClick={() => rejectNewWord(activeCloudId, word.id)}>
+                  <button
+                    className="button"
+                    onClick={() => rejectNewWord(selectedCloudId, word.id)}
+                  >
                     recusar
                   </button>
                 </div>
@@ -284,9 +357,9 @@ export default function SkyPanel() {
                   ))}
                 </select>
               </article>
-            ))}
-          </div>
-        )}
+            ))
+          )}
+        </div>
 
         {feedback && <p className="clean-feedback">{feedback}</p>}
       </section>
