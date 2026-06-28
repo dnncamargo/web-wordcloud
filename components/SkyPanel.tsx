@@ -38,8 +38,7 @@ export default function SkyPanel() {
   const [questionDraft, setQuestionDraft] = useState("");
   const [feedback, setFeedback] = useState("");
 
-  const selectedCloud =
-    clouds.find((cloud) => cloud.id === selectedCloudId) ?? null;
+  const selectedCloud = clouds.find((cloud) => cloud.id === selectedCloudId) ?? null;
 
   useEffect(() => {
     const unsubscribeClouds = listenClouds(setClouds);
@@ -124,8 +123,7 @@ export default function SkyPanel() {
 
     if (!cleanValue) return;
 
-    const currentValue =
-      field === "title" ? selectedCloud.title : selectedCloud.publicTitle;
+    const currentValue = field === "title" ? selectedCloud.title : selectedCloud.publicTitle;
 
     if (cleanValue === currentValue) return;
 
@@ -176,52 +174,28 @@ export default function SkyPanel() {
               const isArchived = cloud.status === "archived";
 
               return (
-                <article
-                  key={cloud.id}
-                  className={[
-                    "clean-cloud-item",
-                    isSelected ? "selected" : "",
-                    isActive ? "active" : "",
-                    isArchived ? "archived" : "",
-                  ].join(" ")}
-                >
-                  <button
-                    className="cloud-name-button"
-                    onClick={() => setSelectedCloudId(cloud.id)}
-                  >
+                <article key={cloud.id} className={["clean-cloud-item", isSelected ? "selected" : "", isActive ? "active" : "", isArchived ? "archived" : ""].join(" ")}>
+                  <button className="cloud-name-button" onClick={() => setSelectedCloudId(cloud.id)}>
                     <strong>{cloud.title || "Sem título"}</strong>
 
-                    <small>
-                      {isActive
-                        ? "ativa na chuva"
-                        : getStatusLabel(cloud.status)}
-                    </small>
+                    <small>{isActive ? "ativa na chuva" : getStatusLabel(cloud.status)}</small>
                   </button>
 
                   <div className="cloud-row-actions">
                     {!isActive && !isArchived && (
-                      <button
-                        className="button"
-                        onClick={() => handleActivateCloud(cloud.id)}
-                      >
+                      <button className="button" onClick={() => handleActivateCloud(cloud.id)}>
                         ativar
                       </button>
                     )}
 
                     {isActive && (
-                      <button
-                        className="button"
-                        onClick={() => handleArchiveCloud(cloud.id)}
-                      >
+                      <button className="button" onClick={() => handleArchiveCloud(cloud.id)}>
                         arquivar
                       </button>
                     )}
 
                     {isArchived && (
-                      <button
-                        className="button"
-                        onClick={() => handleUnarchiveCloud(cloud.id)}
-                      >
+                      <button className="button" onClick={() => handleUnarchiveCloud(cloud.id)}>
                         unarchive
                       </button>
                     )}
@@ -267,27 +241,16 @@ export default function SkyPanel() {
                 ) : (
                   words.map((word) => (
                     <article key={word.id} className="accepted-clean-word">
-                      <input
-                        defaultValue={word.text}
-                        onBlur={(event) =>
-                          handleUpdateAcceptedWord(word, event.target.value)
-                        }
-                      />
+                      <input defaultValue={word.text} onBlur={(event) => handleUpdateAcceptedWord(word, event.target.value)} />
 
-                      <span>{word.count}</span>
+                      <span className={`merge-count ${(word.aliases?.length ?? 0) === 0 ? "empty" : ""}`} title={word.aliases?.join(", ")}>
+                        (+{word.aliases?.length ?? 0})
+                      </span>
+                      <span className="word-count">{word.count}</span>
 
-                      {(word.aliases?.length ?? 0) > 0 && (
-                        <small title={word.aliases?.join(", ")}>
-                          {word.aliases?.length} mesclada
-                          {word.aliases?.length === 1 ? "" : "s"}
-                        </small>
-                      )}
 
-                      <button
-                        className="button"
-                        onClick={() => deleteWord(selectedCloud.id, word.id)}
-                      >
-                        remover
+                      <button className="button remove-word-button" aria-label={`Remover ${word.text}`} title="Remover" onClick={() => deleteWord(selectedCloud.id, word.id)}>
+                        ×
                       </button>
                     </article>
                   ))
@@ -324,28 +287,16 @@ export default function SkyPanel() {
                 <strong>{word.text}</strong>
 
                 <div className="clean-action-row">
-                  <button
-                    className="button"
-                    onClick={() =>
-                      approveNewWord(selectedCloudId, word.id, word.text)
-                    }
-                  >
+                  <button className="button" onClick={() => approveNewWord(selectedCloudId, word.id, word.text)}>
                     aceitar
                   </button>
 
-                  <button
-                    className="button"
-                    onClick={() => rejectNewWord(selectedCloudId, word.id)}
-                  >
+                  <button className="button" onClick={() => rejectNewWord(selectedCloudId, word.id)}>
                     recusar
                   </button>
                 </div>
 
-                <select
-                  defaultValue=""
-                  onChange={(event) => handleMerge(word, event.target.value)}
-                  disabled={words.length === 0}
-                >
+                <select defaultValue="" onChange={(event) => handleMerge(word, event.target.value)} disabled={words.length === 0}>
                   <option value="" disabled>
                     mesclar com...
                   </option>
