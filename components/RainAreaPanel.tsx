@@ -140,10 +140,9 @@ export default function RainAreaPanel() {
   const [layoutSeed, setLayoutSeed] = useState(1);
 
   useEffect(() => {
-    setLayoutSeed(Date.now());
-
-    const unsubscribe = listenGlobalSettings((cloudId) => {
+    const unsubscribe = listenGlobalSettings((cloudId, windSeed) => {
       setActiveCloudId(cloudId);
+      setLayoutSeed(windSeed || Date.now());
     });
 
     return () => unsubscribe();

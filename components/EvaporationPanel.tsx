@@ -1,10 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import {
-  listenGlobalSettings,
-  submitNewWord,
-} from "@/lib/firebase/cloudService";
+import { listenGlobalSettings, submitNewWord } from "@/lib/firebase/cloudService";
 import { normalizeWord } from "@/lib/normalizeWord";
 
 type LocalIdeaStatus = "local" | "sent" | "error";
@@ -122,18 +119,14 @@ export default function EvaporationPanel() {
     try {
       await submitNewWord(activeCloudId, nextIdea.text, deviceId);
 
-      const updatedIdeas = nextIdeas.map((idea) =>
-        idea.id === nextIdea.id ? { ...idea, status: "sent" as const } : idea
-      );
+      const updatedIdeas = nextIdeas.map((idea) => (idea.id === nextIdea.id ? { ...idea, status: "sent" as const } : idea));
 
       saveIdeas(updatedIdeas);
       setFeedback("Ideia evaporada para aprovação.");
     } catch (error) {
       console.error(error);
 
-      const updatedIdeas = nextIdeas.map((idea) =>
-        idea.id === nextIdea.id ? { ...idea, status: "error" as const } : idea
-      );
+      const updatedIdeas = nextIdeas.map((idea) => (idea.id === nextIdea.id ? { ...idea, status: "error" as const } : idea));
 
       saveIdeas(updatedIdeas);
       setFeedback("A ideia ficou salva nesta máquina, mas não foi enviada.");
@@ -169,13 +162,7 @@ export default function EvaporationPanel() {
 
       <section className="evaporation-bottom">
         <form onSubmit={handleSubmit} className="evaporation-form">
-          <input
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            placeholder="Digite uma palavra ou ideia curta"
-            maxLength={40}
-            aria-label="Digite uma ideia"
-          />
+          <input value={text} onChange={(event) => setText(event.target.value)} placeholder="Digite uma palavra ou ideia curta" maxLength={40} aria-label="Digite uma ideia" />
 
           <button type="submit">Evaporar</button>
         </form>

@@ -1,19 +1,6 @@
 import { db } from "@/lib/firebase/client";
 import { normalizeWord } from "@/lib/normalizeWord";
-import {
-  addDoc,
-  collection,
-  deleteDoc,
-  doc,
-  getDoc,
-  increment,
-  onSnapshot,
-  orderBy,
-  query,
-  serverTimestamp,
-  setDoc,
-  updateDoc,
-} from "firebase/firestore";
+import { addDoc, collection, deleteDoc, doc, getDoc, increment, onSnapshot, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
 
 export type FirebaseCloud = {
   id: string;
@@ -38,9 +25,16 @@ export type FirebaseNewWord = {
   deviceId: string;
 };
 
-export function listenGlobalSettings(callback: (activeCloudId: string | null) => void) {
+export type GlobalSettings = {
+  activeCloudId: string | null;
+  windSeed: number;
+};
+
+export function listenGlobalSettings(callback: (activeCloudId: string | null, windSeed: number) => void) {
   return onSnapshot(doc(db, "settings", "global"), (snapshot) => {
-    callback(snapshot.data()?.activeCloudId ?? null);
+    const data = snapshot.data();
+
+    callback(data?.activeCloudId ?? null, Number(data?.windSeed ?? 1));
   });
 }
 
@@ -107,7 +101,7 @@ export function listenWords(cloudId: string, callback: (words: FirebaseWord[]) =
           count: Number(data.count ?? 1),
           aliases: Array.isArray(data.aliases) ? data.aliases : [],
         };
-      })
+      }),
     );
   });
 }
@@ -170,7 +164,7 @@ export async function activateCloud(cloudId: string) {
     {
       activeCloudId: cloudId,
     },
-    { merge: true }
+    { merge: true },
   );
 }
 
@@ -190,7 +184,7 @@ export async function archiveCloud(cloudId: string) {
       {
         activeCloudId: null,
       },
-      { merge: true }
+      { merge: true },
     );
   }
 }
@@ -203,11 +197,7 @@ export async function unarchiveCloud(cloudId: string) {
   });
 }
 
-export async function updateCloudText(
-  cloudId: string,
-  field: "title" | "publicTitle",
-  value: string
-) {
+export async function updateCloudText(cloudId: string, field: "title" | "publicTitle", value: string) {
   await updateDoc(doc(db, "clouds", cloudId), {
     [field]: value,
     updatedAt: serverTimestamp(),
@@ -258,11 +248,7 @@ export async function approveNewWord(cloudId: string, newWordId: string, text: s
   });
 }
 
-export async function mergeNewWordIntoWord(
-  cloudId: string,
-  newWord: FirebaseNewWord,
-  targetWord: FirebaseWord
-) {
+export async function mergeNewWordIntoWord(cloudId: string, newWord: FirebaseNewWord, targetWord: FirebaseWord) {
   await updateDoc(doc(db, "clouds", cloudId, "words", targetWord.id), {
     count: increment(1),
     aliases: [...new Set([...(targetWord.aliases ?? []), newWord.text])],
@@ -292,4 +278,15 @@ export async function updateWordText(cloudId: string, word: FirebaseWord, nextTe
 
 export async function deleteWord(cloudId: string, wordId: string) {
   await deleteDoc(doc(db, "clouds", cloudId, "words", wordId));
+}
+
+export async function blowWind() {
+  await setDoc(
+    doc(db, "settings", "global"),
+    {
+      windSeed: Date.now(),
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true },
+  );
 }

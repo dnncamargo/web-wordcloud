@@ -19,6 +19,7 @@ import {
   unarchiveCloud,
   updateCloudText,
   updateWordText,
+  blowWind,
 } from "@/lib/firebase/cloudService";
 
 function getStatusLabel(status: FirebaseCloud["status"]) {
@@ -155,6 +156,7 @@ export default function SkyPanel() {
 
   return (
     <main className="sky-clean">
+      {/* Gerenciamento de Nuvens */}
       <aside className="sky-clean-column sky-clouds-column">
         <header className="sky-clean-header">
           <h1>Gerenciamento do Céu</h1>
@@ -162,6 +164,17 @@ export default function SkyPanel() {
           <button className="button" onClick={handleCreateCloud}>
             +
           </button>
+          {/* <button
+            className="button"
+            onClick={async () => {
+              await blowWind();
+              setFeedback("O vento reorganizou a chuva.");
+            }}
+            title="Ventar"
+            aria-label="Ventar"
+          >
+            ≈
+          </button> */}
         </header>
 
         <section className="column-scroll-body clean-list">
@@ -178,7 +191,7 @@ export default function SkyPanel() {
                   <button className="cloud-name-button" onClick={() => setSelectedCloudId(cloud.id)}>
                     <strong>{cloud.title || "Sem título"}</strong>
 
-                    <small>{isActive ? "ativa na chuva" : getStatusLabel(cloud.status)}</small>
+                    <small>{isActive ? "em precipitação" : getStatusLabel(cloud.status)}</small>
                   </button>
 
                   <div className="cloud-row-actions">
@@ -207,6 +220,7 @@ export default function SkyPanel() {
         </section>
       </aside>
 
+      {/* Gestão da Nuvem Selecionada */}
       <section className="sky-clean-column sky-current-column">
         {selectedCloud ? (
           <>
@@ -248,7 +262,6 @@ export default function SkyPanel() {
                       </span>
                       <span className="word-count">{word.count}</span>
 
-
                       <button className="button remove-word-button" aria-label={`Remover ${word.text}`} title="Remover" onClick={() => deleteWord(selectedCloud.id, word.id)}>
                         ×
                       </button>
@@ -270,6 +283,7 @@ export default function SkyPanel() {
         )}
       </section>
 
+      {/* Recepção de Palavras */}
       <section className="sky-clean-column sky-new-column">
         <div className="clean-section-title">
           <h2>Novas ideias</h2>
