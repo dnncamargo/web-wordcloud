@@ -271,6 +271,7 @@ Sky:
 * edição inline
 * interface simplificada
 * gerenciamento completo das nuvens
+* reordenação das ideias (Ventar)
 
 ---
 

@@ -160,21 +160,22 @@ export default function SkyPanel() {
       <aside className="sky-clean-column sky-clouds-column">
         <header className="sky-clean-header">
           <h1>Gerenciamento do Céu</h1>
-
-          <button className="button" onClick={handleCreateCloud}>
-            +
-          </button>
-          {/* <button
-            className="button"
-            onClick={async () => {
-              await blowWind();
-              setFeedback("O vento reorganizou a chuva.");
-            }}
-            title="Ventar"
-            aria-label="Ventar"
-          >
-            ≈
-          </button> */}
+          <div className="sky-clean-header-actions">
+            <button className="button" onClick={handleCreateCloud}>
+              +
+            </button>
+            <button
+              className="button"
+              onClick={async () => {
+                await blowWind();
+                setFeedback("O vento reorganizou a chuva.");
+              }}
+              title="Ventar"
+              aria-label="Ventar"
+            >
+              ≈
+            </button>
+          </div>
         </header>
 
         <section className="column-scroll-body clean-list">
@@ -197,19 +198,19 @@ export default function SkyPanel() {
                   <div className="cloud-row-actions">
                     {!isActive && !isArchived && (
                       <button className="button" onClick={() => handleActivateCloud(cloud.id)}>
-                        ativar
+                        Ativar
                       </button>
                     )}
 
                     {isActive && (
                       <button className="button" onClick={() => handleArchiveCloud(cloud.id)}>
-                        arquivar
+                        Arquivar
                       </button>
                     )}
 
                     {isArchived && (
                       <button className="button" onClick={() => handleUnarchiveCloud(cloud.id)}>
-                        unarchive
+                        Desarquivar
                       </button>
                     )}
                   </div>
@@ -302,17 +303,17 @@ export default function SkyPanel() {
 
                 <div className="clean-action-row">
                   <button className="button" onClick={() => approveNewWord(selectedCloudId, word.id, word.text)}>
-                    aceitar
+                    Aceitar
                   </button>
 
                   <button className="button" onClick={() => rejectNewWord(selectedCloudId, word.id)}>
-                    recusar
+                    Recusar
                   </button>
                 </div>
 
                 <select defaultValue="" onChange={(event) => handleMerge(word, event.target.value)} disabled={words.length === 0}>
                   <option value="" disabled>
-                    mesclar com...
+                    Mesclar com...
                   </option>
 
                   {words.map((acceptedWord) => (

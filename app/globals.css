@@ -33,9 +33,7 @@ html,
 body {
   margin: 0;
   color: var(--foreground);
-  background:
-    radial-gradient(circle at top left, #ffffff 0, transparent 36%),
-    linear-gradient(135deg, #dff5ff, #eaf7ff 45%, #f8fbff);
+  background: radial-gradient(circle at top left, #ffffff 0, transparent 36%), linear-gradient(135deg, #dff5ff, #eaf7ff 45%, #f8fbff);
   font-family: var(--font-sans), Arial, Helvetica, sans-serif;
 }
 
@@ -301,6 +299,7 @@ input {
   min-height: 0;
   margin: 0 auto;
   overflow: hidden;
+  padding: 2vw;
 }
 
 .free-rain-field::before {
@@ -523,20 +522,37 @@ input {
 
 /* CSS */
 .button {
-  background-color: #FFFFFF;
+  background-color: #ffffff;
   border: 0;
-  border-radius: .5rem;
+  border-radius: 0.5rem;
   box-sizing: border-box;
   color: var(--accent-dark);
-  font-family: "Inter var",ui-sans-serif,system-ui,-apple-system,system-ui,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji";
-  font-size: .875rem;
+  font-family:
+    "Inter var",
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    system-ui,
+    "Segoe UI",
+    Roboto,
+    "Helvetica Neue",
+    Arial,
+    "Noto Sans",
+    sans-serif,
+    "Apple Color Emoji",
+    "Segoe UI Emoji",
+    "Segoe UI Symbol",
+    "Noto Color Emoji";
+  font-size: 0.875rem;
   font-weight: 600;
   line-height: 0.3rem;
-  padding: .75rem 1rem;
+  padding: 0.75rem 1rem;
   text-align: center;
-  text-decoration: none #D1D5DB solid;
+  text-decoration: none #d1d5db solid;
   text-decoration-thickness: auto;
-  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px 0 rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 1px 3px 0 rgba(0, 0, 0, 0.1),
+    0 1px 2px 0 rgba(0, 0, 0, 0.06);
   cursor: pointer;
   user-select: none;
   -webkit-user-select: none;
@@ -544,7 +560,7 @@ input {
 }
 
 .button:hover {
-  background-color: rgb(249,250,251);
+  background-color: rgb(249, 250, 251);
 }
 
 .button:focus {
@@ -559,7 +575,7 @@ input {
 .sky-clean {
   height: 100vh;
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr) 320px;
+  grid-template-columns: 300px minmax(0, 1fr) 320px;
   gap: 10px;
   padding: 10px;
   overflow: hidden;
@@ -584,6 +600,13 @@ input {
 .sky-clean-header,
 .clean-section-title {
   flex-shrink: 0;
+}
+
+.sky-clean-header-actions {
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-end;
+  gap: 5px;
 }
 
 .column-scroll-body {
@@ -918,4 +941,3 @@ input {
 .clean-question-input {
   font-family: var(--font-mono), monospace;
 }
-
