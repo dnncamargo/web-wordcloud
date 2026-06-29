@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   activateCloud,
   approveNewWord,
@@ -27,6 +27,12 @@ function getStatusLabel(status: FirebaseCloud["status"]) {
   if (status === "draft") return "rascunho";
   if (status === "closed") return "fechada";
   return "arquivada";
+}
+
+function getDeviceShortId(deviceId: string) {
+  if (!deviceId) return "????";
+
+  return deviceId.replaceAll("-", "").slice(0, 4).toUpperCase();
 }
 
 export default function SkyPanel() {
@@ -153,6 +159,24 @@ export default function SkyPanel() {
     await updateWordText(selectedCloudId, word, cleanValue);
     setFeedback("Palavra atualizada.");
   }
+
+  const pendingIdeaStats = useMemo(() => {
+    const byIdea = new Map<string, number>();
+    const byDeviceAndIdea = new Map<string, number>();
+
+    for (const word of newWords) {
+      const ideaKey = word.normalized || word.text.trim().toLowerCase();
+      const deviceKey = `${word.deviceId || "unknown"}::${ideaKey}`;
+
+      byIdea.set(ideaKey, (byIdea.get(ideaKey) ?? 0) + 1);
+      byDeviceAndIdea.set(deviceKey, (byDeviceAndIdea.get(deviceKey) ?? 0) + 1);
+    }
+
+    return {
+      byIdea,
+      byDeviceAndIdea,
+    };
+  }, [newWords]);
 
   return (
     <main className="sky-clean">
@@ -300,6 +324,23 @@ export default function SkyPanel() {
             newWords.map((word) => (
               <article key={word.id} className="new-clean-word">
                 <strong>{word.text}</strong>
+
+                {(() => {
+                  const ideaKey = word.normalized || word.text.trim().toLowerCase();
+                  const deviceKey = `${word.deviceId || "unknown"}::${ideaKey}`;
+                  const sameIdeaCount = pendingIdeaStats.byIdea.get(ideaKey) ?? 1;
+                  const sameDeviceIdeaCount = pendingIdeaStats.byDeviceAndIdea.get(deviceKey) ?? 1;
+
+                  return (
+                    <div className="new-word-meta">
+                      <span>{getDeviceShortId(word.deviceId)}</span>
+
+                      {sameDeviceIdeaCount > 1 && <span className="warning-meta"> repetiu {sameDeviceIdeaCount}x</span>}
+
+                      {sameIdeaCount > sameDeviceIdeaCount && <span>total {sameIdeaCount}x</span>}
+                    </div>
+                  );
+                })()}
 
                 <div className="clean-action-row">
                   <button className="button" onClick={() => approveNewWord(selectedCloudId, word.id, word.text)}>

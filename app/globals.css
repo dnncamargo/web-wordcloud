@@ -520,6 +520,27 @@ input {
   }
 }
 
+.new-word-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 4px 0 8px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.new-word-meta span {
+  border-radius: 999px;
+  padding: 0.18rem 0.42rem;
+  background: rgba(23, 32, 51, 0.06);
+}
+
+.new-word-meta .warning-meta {
+  color: #be123c;
+  background: rgba(244, 63, 94, 0.1);
+}
+
 /* CSS */
 .button {
   background-color: #ffffff;
