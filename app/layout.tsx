@@ -8,7 +8,7 @@ export const metadata: Metadata = {
     openGraph: {
     title: "Nuvem Digital",
     description:
-      "Evapore suas ideias e veja o que acontece com elas na nuvem digital.",
+      "Nuvem Digital - plataforma colaborativa de ideias.",
     type: "website",
     images: [
       {
@@ -23,7 +23,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Nuvem Digital",
     description:
-      "Evapore suas ideias e veja o que acontece com elas na nuvem digital.",
+      "Nuvem Digital - plataforma colaborativa de ideias.",
     images: ["/twitter-image.png"],
   },
 };
