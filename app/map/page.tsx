@@ -32,8 +32,8 @@ const routes = [
     status: "Debug",
   },
   {
-    title: "API",
-    path: "/api/rain-snapshot",
+    title: "Cloud Snapshot API",
+    path: "/api/cloud-snapshot",
     description: "Endpoint JSON usado para obter o estado atual da nuvem em precipitação.",
     status: "Sistema",
   },
