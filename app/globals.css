@@ -1031,3 +1031,114 @@ input {
   width: 28px;
   height: 28px;
 }
+
+.weathermap-page {
+  min-height: 100vh;
+  padding: clamp(18px, 3vw, 40px);
+  background:
+    radial-gradient(circle at 20% 10%, rgba(255, 255, 255, 0.95), transparent 32%),
+    linear-gradient(160deg, #dff5ff 0%, #eef9ff 45%, #ffffff 100%);
+  color: var(--foreground);
+}
+
+.weathermap-header {
+  width: min(1100px, 100%);
+  margin: 0 auto 24px;
+}
+
+.weathermap-header p {
+  margin: 0 0 8px;
+  color: var(--accent-dark);
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: 0.75rem;
+}
+
+.weathermap-header h1 {
+  margin: 0;
+  font-family: "Cloud", var(--font-sans), sans-serif;
+  font-size: clamp(3rem, 8vw, 7rem);
+  line-height: 0.9;
+}
+
+.weathermap-header span {
+  display: block;
+  margin-top: 8px;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.weathermap-grid {
+  width: min(1100px, 100%);
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.weathermap-card {
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px;
+  border: 1px solid rgba(23, 32, 51, 0.09);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.76);
+  color: inherit;
+  transition:
+    transform 160ms ease,
+    background 160ms ease,
+    border-color 160ms ease;
+}
+
+.weathermap-card:hover {
+  transform: translateY(-2px);
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(14, 165, 233, 0.34);
+}
+
+.weathermap-status {
+  display: inline-flex;
+  margin-bottom: 10px;
+  padding: 0.22rem 0.5rem;
+  border-radius: 999px;
+  background: rgba(14, 165, 233, 0.12);
+  color: var(--accent-dark);
+  font-size: 0.72rem;
+  font-weight: 900;
+}
+
+.weathermap-card h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  letter-spacing: -0.04em;
+}
+
+.weathermap-card p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  line-height: 1.45;
+  font-size: 0.92rem;
+}
+
+.weathermap-card code {
+  color: var(--accent-dark);
+  font-family: var(--font-mono), monospace;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+@media (max-width: 900px) {
+  .weathermap-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  .weathermap-grid {
+    grid-template-columns: 1fr;
+  }
+}
