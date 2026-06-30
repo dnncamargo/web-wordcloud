@@ -1,14 +1,11 @@
 export const dynamic = "force-dynamic";
 
 export function GET() {
-  const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ?? "";
-  const apiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY ?? "";
-
   const html = `<!doctype html>
 <html lang="pt-BR">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>Zona de Precipitação - Nuvem Digital</title>
 
   <style>
@@ -34,15 +31,13 @@ export function GET() {
 
     html,
     body {
-      margin: 0;
       width: 100%;
       height: 100%;
+      margin: 0;
       overflow: hidden;
-      font-family: Arial, Helvetica, sans-serif;
       color: #172033;
-      background:
-        radial-gradient(circle at 20% 10%, rgba(255,255,255,0.95), transparent 32%),
-        linear-gradient(160deg, #dff5ff 0%, #eef9ff 45%, #ffffff 100%);
+      font-family: Arial, Helvetica, sans-serif;
+      background: linear-gradient(160deg, #dff5ff 0%, #eef9ff 48%, #ffffff 100%);
     }
 
     main {
@@ -72,9 +67,9 @@ export function GET() {
       width: 92vw;
       margin: 0 auto;
       font-family: "Cloud", Arial, sans-serif;
-      font-size: clamp(40px, 7vw, 92px);
-      line-height: 0.92;
-      letter-spacing: -0.06em;
+      font-size: 72px;
+      line-height: 0.95;
+      letter-spacing: -0.04em;
     }
 
     #field {
@@ -91,7 +86,7 @@ export function GET() {
       top: 50%;
       color: #075985;
       font-weight: 900;
-      line-height: 0.92;
+      line-height: 0.95;
       letter-spacing: -0.04em;
       text-align: center;
       white-space: normal;
@@ -102,13 +97,13 @@ export function GET() {
 
     @keyframes floatWord {
       0%, 100% {
-        margin-left: -10px;
+        margin-left: -8px;
         margin-top: 0;
       }
 
       50% {
-        margin-left: 10px;
-        margin-top: -12px;
+        margin-left: 8px;
+        margin-top: -10px;
       }
     }
 
@@ -127,16 +122,21 @@ export function GET() {
       color: #0369a1;
     }
 
-    .sunny {
+    .center-message {
       height: 100vh;
       display: flex;
       align-items: center;
       justify-content: center;
       text-align: center;
       font-family: "Cloud", Arial, sans-serif;
-      font-size: clamp(48px, 9vw, 120px);
-      line-height: 0.9;
-      letter-spacing: -0.06em;
+      font-size: 82px;
+      line-height: 0.95;
+      letter-spacing: -0.04em;
+      padding: 24px;
+    }
+
+    .muted {
+      color: rgba(23,32,51,.55);
     }
 
     .message {
@@ -166,32 +166,18 @@ export function GET() {
   </main>
 
   <script>
-    var PROJECT_ID = ${JSON.stringify(projectId)};
-    var API_KEY = ${JSON.stringify(apiKey)};
     var lastSignature = "";
-
-    function firestoreUrl(path) {
-      return "https://firestore.googleapis.com/v1/projects/" +
-        PROJECT_ID +
-        "/databases/(default)/documents/" +
-        path +
-        "?key=" +
-        API_KEY;
-    }
-
-    function getString(fields, key) {
-      if (!fields || !fields[key]) return "";
-      return fields[key].stringValue || "";
-    }
-
-    function getNumber(fields, key) {
-      if (!fields || !fields[key]) return 0;
-      return Number(fields[key].integerValue || fields[key].doubleValue || 0);
-    }
 
     function showSunny() {
       document.body.innerHTML =
-        '<main class="sunny"><section>Dia ensolarado;<br><span style="color:rgba(23,32,51,.55)">sem nuvens.</span></section></main>';
+        '<main class="center-message"><section>Dia ensolarado;<br><span class="muted">sem nuvens.</span></section></main>';
+    }
+
+    function showError(message) {
+      document.body.innerHTML =
+        '<main class="center-message"><section>Erro ao carregar<br><span class="muted">' +
+        String(message) +
+        '</span></section></main>';
     }
 
     function getWeather(total) {
@@ -204,25 +190,46 @@ export function GET() {
 
     function hashText(value) {
       var hash = 0;
+
       for (var i = 0; i < value.length; i++) {
         hash = ((hash << 5) - hash) + value.charCodeAt(i);
         hash = hash | 0;
       }
+
       return Math.abs(hash);
     }
 
-    function render(cloud, words) {
+    function safeClamp(value, min, max) {
+      return Math.min(max, Math.max(min, value));
+    }
+
+    function render(data) {
+      if (!data || !data.ok) {
+        showError(data && data.error ? data.error : "snapshot indisponível");
+        return;
+      }
+
+      if (!data.activeCloudId || !data.cloud) {
+        showSunny();
+        return;
+      }
+
+      var cloud = data.cloud;
+      var words = data.words || [];
+
       var signature = JSON.stringify({
-        title: cloud.title,
-        question: cloud.publicTitle,
+        cloud: cloud,
         words: words
       });
 
       if (signature === lastSignature) return;
       lastSignature = signature;
 
-      document.getElementById("cloudTitle").textContent = cloud.title || "Nuvem Digital";
-      document.getElementById("cloudQuestion").textContent = cloud.publicTitle || "Chuva de ideias";
+      document.getElementById("cloudTitle").textContent =
+        cloud.title || "Nuvem Digital";
+
+      document.getElementById("cloudQuestion").textContent =
+        cloud.publicTitle || "Chuva de ideias";
 
       var field = document.getElementById("field");
       field.innerHTML = "";
@@ -269,8 +276,8 @@ export function GET() {
         var element = document.createElement("span");
         element.className = "word";
         element.textContent = word.text;
-        element.style.left = Math.max(10, Math.min(90, x)) + "%";
-        element.style.top = Math.max(14, Math.min(86, y)) + "%";
+        element.style.left = safeClamp(x, 12, 88) + "%";
+        element.style.top = safeClamp(y, 14, 86) + "%";
         element.style.fontSize = size + "px";
         element.style.animationDelay = "-" + ((hash % 40) / 10) + "s";
 
@@ -283,64 +290,17 @@ export function GET() {
     }
 
     function loadRain() {
-      fetch(firestoreUrl("settings/global"))
+      fetch("/api/rain-snapshot?t=" + Date.now(), {
+        cache: "no-store"
+      })
         .then(function(response) {
-          if (!response.ok) throw new Error("settings/global não lido");
           return response.json();
         })
-        .then(function(settingsDoc) {
-          var fields = settingsDoc.fields || {};
-          var activeCloudId = getString(fields, "activeCloudId");
-
-          if (!activeCloudId) {
-            showSunny();
-            return null;
-          }
-
-          return Promise.all([
-            fetch(firestoreUrl("clouds/" + activeCloudId)).then(function(response) {
-              return response.json();
-            }),
-            fetch(firestoreUrl("clouds/" + activeCloudId + "/words")).then(function(response) {
-              return response.json();
-            })
-          ]);
-        })
-        .then(function(result) {
-          if (!result) return;
-
-          var cloudDoc = result[0];
-          var wordsList = result[1];
-
-          var cloudFields = cloudDoc.fields || {};
-
-          var cloud = {
-            title: getString(cloudFields, "title"),
-            publicTitle: getString(cloudFields, "publicTitle")
-          };
-
-          var documents = wordsList.documents || [];
-
-          var words = documents.map(function(document) {
-            var fields = document.fields || {};
-            var nameParts = document.name.split("/");
-
-            return {
-              id: nameParts[nameParts.length - 1],
-              text: getString(fields, "text"),
-              count: getNumber(fields, "count") || 1
-            };
-          }).sort(function(a, b) {
-            return b.count - a.count;
-          });
-
-          render(cloud, words);
+        .then(function(data) {
+          render(data);
         })
         .catch(function(error) {
-          document.getElementById("cloudQuestion").textContent =
-            "Erro ao carregar a precipitação";
-          document.getElementById("field").innerHTML =
-            '<p class="message">' + String(error.message || error) + '</p>';
+          showError(error && error.message ? error.message : error);
         });
     }
 
