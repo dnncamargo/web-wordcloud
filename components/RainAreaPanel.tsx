@@ -290,7 +290,7 @@ export default function RainAreaPanel() {
     return (
       <main className="rain-stage sunny-rain">
         <section>
-          <h1>Dia ensolarado;</h1>
+          <h1>Dia ensolarado</h1>
           <p>sem nuvens.</p>
         </section>
       </main>

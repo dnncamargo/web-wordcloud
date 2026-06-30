@@ -44,8 +44,10 @@ export default function SkyPanel() {
   const [titleDraft, setTitleDraft] = useState("");
   const [questionDraft, setQuestionDraft] = useState("");
   const [feedback, setFeedback] = useState("");
+  const [showArchivedClouds, setShowArchivedClouds] = useState(false);
 
   const selectedCloud = clouds.find((cloud) => cloud.id === selectedCloudId) ?? null;
+  const visibleClouds = clouds.filter((cloud) => (showArchivedClouds ? cloud.status === "archived" : cloud.status !== "archived"));
 
   useEffect(() => {
     const unsubscribeClouds = listenClouds(setClouds);
@@ -106,7 +108,7 @@ export default function SkyPanel() {
     await activateCloud(cloudId);
 
     setSelectedCloudId(cloudId);
-    setFeedback("Nuvem ativada.");
+    setFeedback("Nuvem em precipitação.");
   }
 
   async function handleArchiveCloud(cloudId: string) {
@@ -184,29 +186,31 @@ export default function SkyPanel() {
       <aside className="sky-clean-column sky-clouds-column">
         <header className="sky-clean-header">
           <h1>Gerenciamento do Céu</h1>
+
           <div className="sky-clean-header-actions">
-            <button className="button" onClick={handleCreateCloud}>
-              +
-            </button>
+
             <button
-              className="button"
-              onClick={async () => {
-                await blowWind();
-                setFeedback("O vento reorganizou a chuva.");
+              className={`button ${showArchivedClouds ? "active" : ""}`}
+              onClick={() => {
+                setShowArchivedClouds((currentValue) => !currentValue);
+                setSelectedCloudId(null);
               }}
-              title="Ventar"
-              aria-label="Ventar"
+              title={showArchivedClouds ? "Ver nuvens ativas e fechadas" : "Ver arquivo"}
+              aria-label={showArchivedClouds ? "Ver nuvens ativas e fechadas" : "Ver arquivo"}
             >
-              ≈
+              ▣
+            </button>
+            <button className="highlight-button" onClick={handleCreateCloud} title="Nova nuvem">
+              +
             </button>
           </div>
         </header>
 
         <section className="column-scroll-body clean-list">
-          {clouds.length === 0 ? (
-            <p className="clean-empty">Nenhuma nuvem criada.</p>
+          {visibleClouds.length === 0 ? (
+            <p className="clean-empty">{showArchivedClouds ? "Nenhuma nuvem arquivada." : "Nenhuma nuvem ativa ou fechada."}</p>
           ) : (
-            clouds.map((cloud) => {
+            visibleClouds.map((cloud) => {
               const isActive = cloud.id === activeCloudId;
               const isSelected = cloud.id === selectedCloudId;
               const isArchived = cloud.status === "archived";
@@ -221,15 +225,37 @@ export default function SkyPanel() {
 
                   <div className="cloud-row-actions">
                     {!isActive && !isArchived && (
-                      <button className="button" onClick={() => handleActivateCloud(cloud.id)}>
-                        Ativar
+                      <button className="button" onClick={() => 
+                          handleActivateCloud(cloud.id)}
+                          title="Precipitar"
+                          aria-label="Precipitar"
+                      >
+                        Precipitar
                       </button>
                     )}
 
                     {isActive && (
-                      <button className="button" onClick={() => handleArchiveCloud(cloud.id)}>
-                        Arquivar
-                      </button>
+                      <>
+                        <button className="button" onClick={() => 
+                            handleArchiveCloud(cloud.id)}
+                            title="Arquivar"
+                            aria-label="Arquivar"
+                        >
+                          Arquivar
+                        </button>
+
+                        <button
+                          className="button"
+                          onClick={async () => {
+                            await blowWind();
+                            setFeedback("O vento reorganizou a chuva.");
+                          }}
+                          title="Ventar"
+                          aria-label="Ventar"
+                        >
+                          ≈
+                        </button>
+                      </>
                     )}
 
                     {isArchived && (
