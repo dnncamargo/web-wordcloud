@@ -21,6 +21,7 @@ import {
   updateWordText,
   blowWind,
 } from "@/lib/firebase/cloudService";
+import { Archive, ArchiveRestore, Plus, Wind, X } from "lucide-react";
 
 function getStatusLabel(status: FirebaseCloud["status"]) {
   if (status === "open") return "aberta";
@@ -188,9 +189,8 @@ export default function SkyPanel() {
           <h1>Gerenciamento do Céu</h1>
 
           <div className="sky-clean-header-actions">
-
             <button
-              className={`button ${showArchivedClouds ? "active" : ""}`}
+              className={`button icon-button ${showArchivedClouds ? "active" : ""}`}
               onClick={() => {
                 setShowArchivedClouds((currentValue) => !currentValue);
                 setSelectedCloudId(null);
@@ -198,10 +198,11 @@ export default function SkyPanel() {
               title={showArchivedClouds ? "Ver nuvens ativas e fechadas" : "Ver arquivo"}
               aria-label={showArchivedClouds ? "Ver nuvens ativas e fechadas" : "Ver arquivo"}
             >
-              ▣
+              <Archive size={15} strokeWidth={2.2} />
             </button>
-            <button className="highlight-button" onClick={handleCreateCloud} title="Nova nuvem">
-              +
+
+            <button className="highlight-button icon-button" onClick={handleCreateCloud} title="Adicionar nuvem" aria-label="Adicionar nuvem">
+              <Plus size={16} strokeWidth={2.5} />
             </button>
           </div>
         </header>
@@ -225,27 +226,19 @@ export default function SkyPanel() {
 
                   <div className="cloud-row-actions">
                     {!isActive && !isArchived && (
-                      <button className="button" onClick={() => 
-                          handleActivateCloud(cloud.id)}
-                          title="Precipitar"
-                          aria-label="Precipitar"
-                      >
+                      <button className="button" onClick={() => handleActivateCloud(cloud.id)} title="Precipitar" aria-label="Precipitar">
                         Precipitar
                       </button>
                     )}
 
                     {isActive && (
                       <>
-                        <button className="button" onClick={() => 
-                            handleArchiveCloud(cloud.id)}
-                            title="Arquivar"
-                            aria-label="Arquivar"
-                        >
+                        <button className="button" onClick={() => handleArchiveCloud(cloud.id)} title="Arquivar" aria-label="Arquivar">
                           Arquivar
                         </button>
 
                         <button
-                          className="button"
+                          className="button icon-button"
                           onClick={async () => {
                             await blowWind();
                             setFeedback("O vento reorganizou a chuva.");
@@ -253,14 +246,14 @@ export default function SkyPanel() {
                           title="Ventar"
                           aria-label="Ventar"
                         >
-                          ≈
+                          <Wind size={14} strokeWidth={2.2} />
                         </button>
                       </>
                     )}
 
                     {isArchived && (
-                      <button className="button" onClick={() => handleUnarchiveCloud(cloud.id)}>
-                        Desarquivar
+                      <button className="button icon-button" onClick={() => handleUnarchiveCloud(cloud.id)} title="Desarquivar" aria-label="Desarquivar">
+                        <ArchiveRestore size={17} strokeWidth={2.2} />
                       </button>
                     )}
                   </div>
@@ -313,8 +306,8 @@ export default function SkyPanel() {
                       </span>
                       <span className="word-count">{word.count}</span>
 
-                      <button className="button remove-word-button" aria-label={`Remover ${word.text}`} title="Remover" onClick={() => deleteWord(selectedCloud.id, word.id)}>
-                        ×
+                      <button className="button icon-button remove-word-button" aria-label={`Remover ${word.text}`} title="Remover" onClick={() => deleteWord(selectedCloud.id, word.id)}>
+                        <X size={15} strokeWidth={2.4} />
                       </button>
                     </article>
                   ))

@@ -594,7 +594,7 @@ input {
 }
 
 .highlight-button {
-  background: var(--foreground);
+  background: var(--accent);
   border: 0;
   border-radius: 0.5rem;
   box-sizing: border-box;
@@ -632,7 +632,7 @@ input {
 }
 
 .highlight-button:hover {
-  background-color: rgb(39, 39, 39);
+  background-color: var(--accent-dark);
 }
 
 .highlight-button:focus {
@@ -1012,4 +1012,22 @@ input {
 
 .clean-question-input {
   font-family: var(--font-mono), monospace;
+}
+
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+
+.icon-button svg {
+  display: block;
+  pointer-events: none;
+}
+
+.remove-word-button {
+  width: 28px;
+  height: 28px;
 }
