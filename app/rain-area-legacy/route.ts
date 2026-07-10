@@ -290,7 +290,7 @@ export function GET() {
     }
 
     function loadRain() {
-      fetch("/api/rain-snapshot?t=" + Date.now(), {
+      fetch("/api/cloud-snapshot?t=" + Date.now(), {
         cache: "no-store"
       })
         .then(function(response) {
