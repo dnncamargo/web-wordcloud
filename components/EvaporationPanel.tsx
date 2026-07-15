@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { listenGlobalSettings, submitNewWord } from "@/lib/firebase/cloudService";
 import { normalizeWord } from "@/lib/normalizeWord";
+import CloudIllustration from "./CloudIllustration";
 
 type LocalIdeaStatus = "local" | "sent" | "error";
 
@@ -138,7 +139,7 @@ export default function EvaporationPanel() {
       <section className="evaporation-sky" aria-label="Ideias evaporadas">
         {ideas.length === 0 ? (
           <div className="empty-evaporation">
-            <span>☁</span>
+            <CloudIllustration />
             <p>Evapore a primeira ideia</p>
           </div>
         ) : (

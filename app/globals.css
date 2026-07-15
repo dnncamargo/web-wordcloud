@@ -1142,3 +1142,31 @@ input {
     grid-template-columns: 1fr;
   }
 }
+.empty-evaporation {
+  height: 100%;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  text-align: center;
+  color: rgba(23, 32, 51, 0.42);
+}
+
+.empty-evaporation-cloud {
+  width: clamp(190px, 30vw, 360px);
+  height: auto;
+  display: block;
+  margin-bottom: 0.75rem;
+  overflow: visible;
+  animation: empty-cloud-float 5200ms ease-in-out infinite;
+}
+
+@keyframes empty-cloud-float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+
+  50% {
+    transform: translateY(-10px);
+  }
+}
