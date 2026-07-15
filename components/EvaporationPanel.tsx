@@ -123,7 +123,7 @@ export default function EvaporationPanel() {
       const updatedIdeas = nextIdeas.map((idea) => (idea.id === nextIdea.id ? { ...idea, status: "sent" as const } : idea));
 
       saveIdeas(updatedIdeas);
-      setFeedback("Ideia evaporada para aprovação.");
+      setFeedback("Ideia evaporada para apreciação atmosférica.");
     } catch (error) {
       console.error(error);
 
