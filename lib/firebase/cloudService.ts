@@ -228,7 +228,7 @@ export async function approveNewWord(cloudId: string, newWordId: string, text: s
 
     const newWordData = newWordSnapshot.data();
 
-    if (String(newWordData.status ?? "pending") !== "pending") return;
+    if (newWordData.status !== "pending") return;
 
     const sourceText = String(newWordData.text ?? text);
     const normalized = normalizeWord(sourceText);
@@ -261,24 +261,94 @@ export async function approveNewWord(cloudId: string, newWordId: string, text: s
   });
 }
 
-export async function mergeNewWordIntoWord(cloudId: string, newWord: FirebaseNewWord, targetWord: FirebaseWord) {
-  await updateDoc(doc(db, "clouds", cloudId, "words", targetWord.id), {
-    count: increment(1),
-    aliases: [...new Set([...(targetWord.aliases ?? []), newWord.text])],
-    updatedAt: serverTimestamp(),
-  });
+export async function autoAggregateEquivalentNewWord(cloudId: string, newWordId: string, targetWordId: string) {
+  const newWordRef = doc(db, "clouds", cloudId, "newWords", newWordId);
+  const targetWordRef = doc(db, "clouds", cloudId, "words", targetWordId);
 
-  await updateDoc(doc(db, "clouds", cloudId, "newWords", newWord.id), {
-    status: "merged",
-    mergedIntoWordId: targetWord.id,
-    reviewedAt: serverTimestamp(),
+  return runTransaction(db, async (transaction) => {
+    const newWordSnapshot = await transaction.get(newWordRef);
+    const targetWordSnapshot = await transaction.get(targetWordRef);
+
+    if (!newWordSnapshot.exists() || !targetWordSnapshot.exists()) return false;
+
+    const newWordData = newWordSnapshot.data();
+    const targetWordData = targetWordSnapshot.data();
+
+    if (newWordData.status !== "pending") return false;
+
+    const newWordText = String(newWordData.text ?? "");
+    const targetWordText = String(targetWordData.text ?? "");
+    const newWordNormalized = normalizeWord(newWordText);
+    const targetWordNormalized = normalizeWord(targetWordText);
+
+    if (!newWordNormalized || !targetWordNormalized || newWordNormalized !== targetWordNormalized) return false;
+
+    transaction.update(targetWordRef, {
+      count: increment(1),
+      updatedAt: serverTimestamp(),
+    });
+
+    transaction.update(newWordRef, {
+      status: "approved",
+      reviewedAt: serverTimestamp(),
+    });
+
+    return true;
+  });
+}
+
+export async function mergeNewWordIntoWord(cloudId: string, newWord: FirebaseNewWord, targetWord: FirebaseWord) {
+  const newWordRef = doc(db, "clouds", cloudId, "newWords", newWord.id);
+  const targetWordRef = doc(db, "clouds", cloudId, "words", targetWord.id);
+
+  return runTransaction(db, async (transaction) => {
+    const newWordSnapshot = await transaction.get(newWordRef);
+    const targetWordSnapshot = await transaction.get(targetWordRef);
+
+    if (!newWordSnapshot.exists() || !targetWordSnapshot.exists()) return false;
+
+    const newWordData = newWordSnapshot.data();
+
+    if (newWordData.status !== "pending") return false;
+
+    const currentNewWordText = String(newWordData.text ?? "");
+    const targetWordData = targetWordSnapshot.data();
+    const currentAliases = Array.isArray(targetWordData.aliases) ? targetWordData.aliases.map(String) : [];
+
+    transaction.update(targetWordRef, {
+      count: increment(1),
+      aliases: [...new Set([...currentAliases, currentNewWordText])],
+      updatedAt: serverTimestamp(),
+    });
+
+    transaction.update(newWordRef, {
+      status: "merged",
+      mergedIntoWordId: targetWord.id,
+      reviewedAt: serverTimestamp(),
+    });
+
+    return true;
   });
 }
 
 export async function rejectNewWord(cloudId: string, newWordId: string) {
-  await updateDoc(doc(db, "clouds", cloudId, "newWords", newWordId), {
-    status: "rejected",
-    reviewedAt: serverTimestamp(),
+  const newWordRef = doc(db, "clouds", cloudId, "newWords", newWordId);
+
+  return runTransaction(db, async (transaction) => {
+    const newWordSnapshot = await transaction.get(newWordRef);
+
+    if (!newWordSnapshot.exists()) return false;
+
+    const newWordData = newWordSnapshot.data();
+
+    if (newWordData.status !== "pending") return false;
+
+    transaction.update(newWordRef, {
+      status: "rejected",
+      reviewedAt: serverTimestamp(),
+    });
+
+    return true;
   });
 }
 

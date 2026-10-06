@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   activateCloud,
+  autoAggregateEquivalentNewWord,
   approveNewWord,
   archiveCloud,
   createCloud,
@@ -115,12 +116,23 @@ export default function SkyPanel() {
 
     if (words.length === 0 || newWords.length === 0) return;
 
-    const acceptedWordsByNormalized = new Map(words.map((word) => [word.normalized, word]));
+    const acceptedWordsByNormalized = new Map<string, FirebaseWord[]>();
+
+    for (const word of words) {
+      const normalized = normalizeWord(word.text);
+
+      if (!normalized) continue;
+
+      const candidates = acceptedWordsByNormalized.get(normalized) ?? [];
+      candidates.push(word);
+      acceptedWordsByNormalized.set(normalized, candidates);
+    }
 
     for (const newWord of newWords) {
       const normalized = normalizeWord(newWord.text);
+      const candidates = acceptedWordsByNormalized.get(normalized) ?? [];
 
-      if (!normalized || !acceptedWordsByNormalized.has(normalized)) continue;
+      if (!normalized || candidates.length !== 1) continue;
 
       const key = `${selectedCloudId}::${newWord.id}`;
 
@@ -128,9 +140,13 @@ export default function SkyPanel() {
 
       autoAggregationStateRef.current.set(key, "processing");
 
-      void approveNewWord(selectedCloudId, newWord.id, newWord.text)
-        .then(() => {
-          autoAggregationStateRef.current.set(key, "completed");
+      void autoAggregateEquivalentNewWord(selectedCloudId, newWord.id, candidates[0].id)
+        .then((didAggregate) => {
+          if (didAggregate) {
+            autoAggregationStateRef.current.set(key, "completed");
+          } else {
+            autoAggregationStateRef.current.delete(key);
+          }
         })
         .catch((error) => {
           autoAggregationStateRef.current.delete(key);
@@ -189,8 +205,11 @@ export default function SkyPanel() {
 
     if (!targetWord) return;
 
-    await mergeNewWordIntoWord(selectedCloudId, newWord, targetWord);
-    setFeedback(`"${newWord.text}" foi mesclada com "${targetWord.text}".`);
+    const didMerge = await mergeNewWordIntoWord(selectedCloudId, newWord, targetWord);
+
+    if (didMerge) {
+      setFeedback(`"${newWord.text}" foi mesclada com "${targetWord.text}".`);
+    }
   }
 
   async function handleUpdateAcceptedWord(word: FirebaseWord, value: string) {
