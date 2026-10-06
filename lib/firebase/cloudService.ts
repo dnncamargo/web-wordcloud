@@ -227,8 +227,9 @@ export async function approveNewWord(cloudId: string, newWordId: string, text: s
     if (!newWordSnapshot.exists()) return;
 
     const newWordData = newWordSnapshot.data();
+    const status = String(newWordData.status ?? "pending");
 
-    if (newWordData.status !== "pending") return;
+    if (status !== "pending") return;
 
     const sourceText = String(newWordData.text ?? text);
     const normalized = normalizeWord(sourceText);
@@ -273,8 +274,9 @@ export async function autoAggregateEquivalentNewWord(cloudId: string, newWordId:
 
     const newWordData = newWordSnapshot.data();
     const targetWordData = targetWordSnapshot.data();
+    const status = String(newWordData.status ?? "pending");
 
-    if (newWordData.status !== "pending") return false;
+    if (status !== "pending") return false;
 
     const newWordText = String(newWordData.text ?? "");
     const targetWordText = String(targetWordData.text ?? "");
@@ -308,8 +310,9 @@ export async function mergeNewWordIntoWord(cloudId: string, newWord: FirebaseNew
     if (!newWordSnapshot.exists() || !targetWordSnapshot.exists()) return false;
 
     const newWordData = newWordSnapshot.data();
+    const status = String(newWordData.status ?? "pending");
 
-    if (newWordData.status !== "pending") return false;
+    if (status !== "pending") return false;
 
     const currentNewWordText = String(newWordData.text ?? "");
     const targetWordData = targetWordSnapshot.data();
@@ -340,8 +343,9 @@ export async function rejectNewWord(cloudId: string, newWordId: string) {
     if (!newWordSnapshot.exists()) return false;
 
     const newWordData = newWordSnapshot.data();
+    const status = String(newWordData.status ?? "pending");
 
-    if (newWordData.status !== "pending") return false;
+    if (status !== "pending") return false;
 
     transaction.update(newWordRef, {
       status: "rejected",
