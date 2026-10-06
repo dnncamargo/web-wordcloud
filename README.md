@@ -24,6 +24,19 @@
 * Firebase Firestore
 * Vercel
 
+## Acesso administrativo do Sky
+
+O painel `/sky` usa uma sessão assinada criada no servidor. Configure no ambiente do servidor duas variáveis fortes e independentes:
+
+```env
+SKY_ADMIN_PASSWORD=
+SKY_SESSION_SECRET=
+```
+
+Essas variáveis são exclusivamente server-only: não use prefixo `NEXT_PUBLIC_`, não as coloque no código do navegador e não as versione. A aplicação falha fechada quando qualquer uma delas está ausente. A sessão é armazenada apenas em cookie `HttpOnly`, com validade finita, e não é persistida no Firestore, `localStorage` ou `sessionStorage`.
+
+A proteção contra tentativas repetidas de login ainda deve receber rate limiting apropriado para o ambiente de produção em uma etapa futura.
+
 ## Fundação de triagem por IA
 
 A integração server-only com OpenRouter permanece sem rota pública até uma etapa futura. Quando for habilitada, configure apenas no ambiente do servidor:
