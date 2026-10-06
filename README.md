@@ -24,6 +24,17 @@
 * Firebase Firestore
 * Vercel
 
+## Fundação de triagem por IA
+
+A integração server-only com OpenRouter permanece sem rota pública até uma etapa futura. Quando for habilitada, configure apenas no ambiente do servidor:
+
+```env
+OPENROUTER_API_KEY=
+OPENROUTER_MODEL=deepseek/deepseek-v4-flash-0731
+```
+
+A conta OpenRouter e a chave devem ter um limite baixo de gastos ou outro guardrail de orçamento.
+
 ---
 
 # Conceitos
