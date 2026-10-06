@@ -1,6 +1,6 @@
 import { db } from "@/lib/firebase/client";
 import { normalizeWord } from "@/lib/normalizeWord";
-import { addDoc, collection, deleteDoc, doc, getDoc, increment, onSnapshot, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
+import { addDoc, collection, deleteDoc, doc, getDoc, increment, onSnapshot, runTransaction, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
 
 export type FirebaseCloud = {
   id: string;
@@ -219,32 +219,45 @@ export async function submitNewWord(cloudId: string, text: string, deviceId: str
 }
 
 export async function approveNewWord(cloudId: string, newWordId: string, text: string) {
-  const normalized = normalizeWord(text);
+  const newWordRef = doc(db, "clouds", cloudId, "newWords", newWordId);
 
-  if (!normalized) return;
+  await runTransaction(db, async (transaction) => {
+    const newWordSnapshot = await transaction.get(newWordRef);
 
-  const wordRef = doc(db, "clouds", cloudId, "words", normalized);
-  const wordSnapshot = await getDoc(wordRef);
+    if (!newWordSnapshot.exists()) return;
 
-  if (wordSnapshot.exists()) {
-    await updateDoc(wordRef, {
-      count: increment(1),
-      updatedAt: serverTimestamp(),
+    const newWordData = newWordSnapshot.data();
+
+    if (String(newWordData.status ?? "pending") !== "pending") return;
+
+    const sourceText = String(newWordData.text ?? text);
+    const normalized = normalizeWord(sourceText);
+
+    if (!normalized) return;
+
+    const wordRef = doc(db, "clouds", cloudId, "words", normalized);
+    const wordSnapshot = await transaction.get(wordRef);
+
+    if (wordSnapshot.exists()) {
+      transaction.update(wordRef, {
+        count: increment(1),
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      transaction.set(wordRef, {
+        text: sourceText.trim(),
+        normalized,
+        count: 1,
+        aliases: [],
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    transaction.update(newWordRef, {
+      status: "approved",
+      reviewedAt: serverTimestamp(),
     });
-  } else {
-    await setDoc(wordRef, {
-      text: text.trim(),
-      normalized,
-      count: 1,
-      aliases: [],
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-  }
-
-  await updateDoc(doc(db, "clouds", cloudId, "newWords", newWordId), {
-    status: "approved",
-    reviewedAt: serverTimestamp(),
   });
 }
 

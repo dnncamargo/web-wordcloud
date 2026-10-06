@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   activateCloud,
   approveNewWord,
@@ -21,6 +21,7 @@ import {
   updateWordText,
   blowWind,
 } from "@/lib/firebase/cloudService";
+import { normalizeWord } from "@/lib/normalizeWord";
 import { Archive, ArchiveRestore, Plus, Wind, X } from "lucide-react";
 
 function getStatusLabel(status: FirebaseCloud["status"]) {
@@ -46,6 +47,7 @@ export default function SkyPanel() {
   const [questionDraft, setQuestionDraft] = useState("");
   const [feedback, setFeedback] = useState("");
   const [showArchivedClouds, setShowArchivedClouds] = useState(false);
+  const autoAggregationStateRef = useRef(new Map<string, "processing" | "completed">());
 
   const selectedCloud = clouds.find((cloud) => cloud.id === selectedCloudId) ?? null;
   const visibleClouds = clouds.filter((cloud) => (showArchivedClouds ? cloud.status === "archived" : cloud.status !== "archived"));
@@ -97,6 +99,45 @@ export default function SkyPanel() {
     setTitleDraft(selectedCloud?.title ?? "");
     setQuestionDraft(selectedCloud?.publicTitle ?? "");
   }, [selectedCloud?.id, selectedCloud?.title, selectedCloud?.publicTitle]);
+
+  useEffect(() => {
+    if (!selectedCloudId) return;
+
+    const pendingWordIds = new Set(newWords.map((word) => word.id));
+
+    for (const key of autoAggregationStateRef.current.keys()) {
+      const [cloudId, newWordId] = key.split("::");
+
+      if (cloudId === selectedCloudId && !pendingWordIds.has(newWordId)) {
+        autoAggregationStateRef.current.delete(key);
+      }
+    }
+
+    if (words.length === 0 || newWords.length === 0) return;
+
+    const acceptedWordsByNormalized = new Map(words.map((word) => [word.normalized, word]));
+
+    for (const newWord of newWords) {
+      const normalized = normalizeWord(newWord.text);
+
+      if (!normalized || !acceptedWordsByNormalized.has(normalized)) continue;
+
+      const key = `${selectedCloudId}::${newWord.id}`;
+
+      if (autoAggregationStateRef.current.has(key)) continue;
+
+      autoAggregationStateRef.current.set(key, "processing");
+
+      void approveNewWord(selectedCloudId, newWord.id, newWord.text)
+        .then(() => {
+          autoAggregationStateRef.current.set(key, "completed");
+        })
+        .catch((error) => {
+          autoAggregationStateRef.current.delete(key);
+          console.error("Não foi possível autoagregar a nova ideia.", error);
+        });
+    }
+  }, [newWords, selectedCloudId, words]);
 
   async function handleCreateCloud() {
     const id = await createCloud();
