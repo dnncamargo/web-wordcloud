@@ -62,6 +62,8 @@ Responsável por:
 * ativar nuvens;
 * arquivar nuvens.
 
+Submissões cuja chave é exatamente equivalente pela normalização determinística existente podem ser autoagregadas à palavra aceita, preservando sua grafia canônica. Similaridade semântica continua reservada para uma futura sugestão de IA.
+
 ---
 
 ## Zona de Precipitação
