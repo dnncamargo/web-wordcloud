@@ -50,6 +50,24 @@ OPENROUTER_MODEL=deepseek/deepseek-v4-flash-0731
 
 A conta OpenRouter e a chave devem ter um limite baixo de gastos ou outro guardrail de orçamento.
 
+### Harness local de avaliação comportamental
+
+O harness `ai:evaluate` verifica o comportamento atual da triagem pedagógica com fixtures sintéticas versionadas. Ele é uma ferramenta de desenvolvimento, não uma certificação automatizada de segurança de moderação: não altera a UI, não usa Firestore, não executa ações de moderação, não cria integração HTTP e não persiste resultados. Os resultados comportamentais exigem interpretação humana.
+
+O modo dry-run não faz chamadas de rede:
+
+```bash
+npm run ai:evaluate -- --dry-run
+```
+
+Uma execução real é explicitamente paga/de rede e deve usar o ambiente Preview do projeto Vercel, sem gravar segredos em disco:
+
+```bash
+vercel env run -e preview -- npm run ai:evaluate -- --allow-network
+```
+
+Use somente fixtures sintéticas. O prompt de produção não é alterado por este checkpoint.
+
 ---
 
 # Conceitos
