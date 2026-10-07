@@ -1,8 +1,9 @@
 import "server-only";
 
+import { getOpenRouterApiKey, getOpenRouterModel } from "@/lib/ai/openRouterConfig";
+
 const OPENROUTER_CHAT_COMPLETIONS_URL =
   "https://openrouter.ai/api/v1/chat/completions";
-const DEFAULT_OPENROUTER_MODEL = "deepseek/deepseek-v4-flash-0731";
 
 export type TriageWord = Readonly<{
   id: string;
@@ -208,13 +209,13 @@ export async function triagePendingWords(input: unknown): Promise<TriageResult[]
     return [];
   }
 
-  const apiKey = process.env.OPENROUTER_API_KEY?.trim();
+  const apiKey = getOpenRouterApiKey();
 
   if (!apiKey) {
     throw new Error("OPENROUTER_API_KEY is not configured.");
   }
 
-  const model = process.env.OPENROUTER_MODEL?.trim() || DEFAULT_OPENROUTER_MODEL;
+  const model = getOpenRouterModel();
   const requestBody = {
     model,
     temperature: 0,
