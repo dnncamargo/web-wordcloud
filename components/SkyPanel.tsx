@@ -23,6 +23,7 @@ import {
   blowWind,
 } from "@/lib/firebase/cloudService";
 import { normalizeWord } from "@/lib/normalizeWord";
+import AiAdminControl from "@/components/AiAdminControl";
 import { Archive, ArchiveRestore, Plus, Wind, X } from "lucide-react";
 
 function getStatusLabel(status: FirebaseCloud["status"]) {
@@ -249,6 +250,8 @@ export default function SkyPanel() {
           <h1>Gerenciamento do Céu</h1>
 
           <div className="sky-clean-header-actions">
+            <AiAdminControl />
+
             <button
               className={`button icon-button ${showArchivedClouds ? "active" : ""}`}
               onClick={() => {
