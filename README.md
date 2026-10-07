@@ -39,6 +39,31 @@ A sessão protege somente a futura administração de IA e os endpoints pagos co
 
 A proteção contra tentativas repetidas de login deverá receber rate limiting apropriado antes que qualquer endpoint de invocação paga seja habilitado. Este checkpoint não conclui a segurança do endpoint pago.
 
+### Guardrails distribuídos para IA paga
+
+O fundamento server-only de rate limiting distribuído já está preparado, mas ainda não existe endpoint pago de triagem e nenhuma rota o utiliza. Antes de habilitar esse endpoint, é obrigatório configurar o Upstash Redis no servidor:
+
+```env
+UPSTASH_REDIS_REST_URL=
+UPSTASH_REDIS_REST_TOKEN=
+```
+
+As variáveis acima nunca devem usar `NEXT_PUBLIC_`, ser impressas ou ser versionadas. A configuração opcional também é server-only:
+
+```env
+AI_RATE_LIMIT_NAMESPACE=
+AI_TRIAGE_BURST_LIMIT=5
+AI_TRIAGE_BURST_WINDOW_SECONDS=60
+AI_TRIAGE_DAILY_LIMIT=50
+AI_TRIAGE_DAILY_WINDOW_SECONDS=86400
+```
+
+Os contadores de produção e preview são isolados por padrão. O guardrail de IA paga falha fechado quando o Redis está ausente, inválido, indisponível ou quando uma resposta do limiter é inesperada; não há fallback em memória. O timeout de rate limiting também nunca autoriza uma invocação. O limite de gastos da conta OpenRouter continua sendo um guardrail secundário.
+
+Este checkpoint somente prepara a infraestrutura e a validação de entrada para a etapa seguinte; não oferece ainda endpoint pago, não chama OpenRouter por uma rota e não altera a rota de sessão administrativa.
+
+Quando a futura rota autenticada receber `pendingWords` vazio, a triagem pode retornar `[]` sem Redis e sem chamar OpenRouter.
+
 ## Fundação de triagem por IA
 
 A integração server-only com OpenRouter permanece sem rota pública até uma etapa futura. Quando for habilitada, configure apenas no ambiente do servidor:
