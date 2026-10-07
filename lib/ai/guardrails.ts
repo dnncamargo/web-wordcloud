@@ -171,7 +171,7 @@ function isValidRedisUrl(value: string): boolean {
   try {
     const url = new URL(value);
     return (
-      (url.protocol === "https:" || url.protocol === "http:") &&
+      url.protocol === "https:" &&
       url.hostname.length > 0
     );
   } catch {
@@ -323,21 +323,20 @@ async function combineLimiterResults(
   limiters: readonly RateLimiter[],
   identifiers: readonly string[],
 ): Promise<GuardrailDecision> {
-  const results = await Promise.allSettled(
-    limiters.map((limiter, index) => limiter.limit(identifiers[index])),
-  );
-  const statuses = results.map((result) =>
-    result.status === "fulfilled"
-      ? classifyLimiterResponse(result.value)
-      : "unavailable",
-  );
+  for (let index = 0; index < limiters.length; index += 1) {
+    let result: unknown;
 
-  if (statuses.includes("unavailable")) {
-    return unavailable();
-  }
+    try {
+      result = await limiters[index].limit(identifiers[index]);
+    } catch {
+      return unavailable();
+    }
 
-  if (statuses.includes("limited")) {
-    return { status: "limited" };
+    const status = classifyLimiterResponse(result);
+
+    if (status !== "allowed") {
+      return { status };
+    }
   }
 
   return { status: "allowed" };

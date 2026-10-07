@@ -19,6 +19,16 @@ export type PaidTriageInput = Readonly<{
   pendingWords: readonly TriageInputWord[];
 }>;
 
+export type BoundedBodyResult =
+  | Readonly<{ status: "ok"; body: string }>
+  | Readonly<{ status: "too-large" }>
+  | Readonly<{ status: "invalid" }>;
+
+export type PaidTriageInputResult =
+  | Readonly<{ status: "ok"; input: PaidTriageInput }>
+  | Readonly<{ status: "too-large" }>
+  | Readonly<{ status: "invalid" }>;
+
 export class TriageInputValidationError extends Error {
   constructor(message = "Invalid triage input.") {
     super(message);
@@ -117,7 +127,7 @@ export function validatePaidTriageInput(value: unknown): PaidTriageInput {
 export async function readBoundedRequestBody(
   request: Request,
   maximumBytes = MAX_BODY_BYTES,
-): Promise<string | null> {
+): Promise<BoundedBodyResult> {
   const contentLength = request.headers.get("content-length");
 
   if (contentLength !== null) {
@@ -128,12 +138,12 @@ export async function readBoundedRequestBody(
       parsedLength >= 0 &&
       parsedLength > maximumBytes
     ) {
-      return null;
+      return { status: "too-large" };
     }
   }
 
   if (request.body === null) {
-    return "";
+    return { status: "ok", body: "" };
   }
 
   const reader = request.body.getReader();
@@ -151,14 +161,19 @@ export async function readBoundedRequestBody(
       totalBytes += result.value.byteLength;
 
       if (totalBytes > maximumBytes) {
-        await reader.cancel();
-        return null;
+        try {
+          await reader.cancel();
+        } catch {
+          // The byte limit has already been established; cancellation failure
+          // must not change the externally visible classification.
+        }
+        return { status: "too-large" };
       }
 
       chunks.push(result.value);
     }
   } catch {
-    return null;
+    return { status: "invalid" };
   }
 
   const bytes = new Uint8Array(totalBytes);
@@ -170,24 +185,30 @@ export async function readBoundedRequestBody(
   }
 
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return {
+      status: "ok",
+      body: new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+    };
   } catch {
-    return null;
+    return { status: "invalid" };
   }
 }
 
 export async function readAndValidatePaidTriageInput(
   request: Request,
-): Promise<PaidTriageInput | null> {
-  const body = await readBoundedRequestBody(request);
+): Promise<PaidTriageInputResult> {
+  const bodyResult = await readBoundedRequestBody(request);
 
-  if (body === null) {
-    return null;
+  if (bodyResult.status !== "ok") {
+    return bodyResult;
   }
 
   try {
-    return validatePaidTriageInput(JSON.parse(body) as unknown);
+    return {
+      status: "ok",
+      input: validatePaidTriageInput(JSON.parse(bodyResult.body) as unknown),
+    };
   } catch {
-    return null;
+    return { status: "invalid" };
   }
 }
