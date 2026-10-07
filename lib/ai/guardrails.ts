@@ -88,6 +88,11 @@ type InternalConfiguration = Readonly<{
   redisToken: string;
 }>;
 
+type RedisCredentials = Readonly<{
+  url: string;
+  token: string;
+}>;
+
 function hasOwn(environment: Environment, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(environment, key);
 }
@@ -179,21 +184,33 @@ function isValidRedisUrl(value: string): boolean {
   }
 }
 
+function readRedisCredentials(environment: Environment): RedisCredentials | null {
+  const directPairIsPresent =
+    hasOwn(environment, "UPSTASH_REDIS_REST_URL") ||
+    hasOwn(environment, "UPSTASH_REDIS_REST_TOKEN");
+
+  const urlKey = directPairIsPresent
+    ? "UPSTASH_REDIS_REST_URL"
+    : "KV_REST_API_URL";
+  const tokenKey = directPairIsPresent
+    ? "UPSTASH_REDIS_REST_TOKEN"
+    : "KV_REST_API_TOKEN";
+  const url = readRequiredEnvironmentValue(environment, urlKey);
+  const token = readRequiredEnvironmentValue(environment, tokenKey);
+
+  if (url === null || token === null || !isValidRedisUrl(url)) {
+    return null;
+  }
+
+  return { url, token };
+}
+
 function readConfiguration(environment: Environment): InternalConfiguration | null {
-  const redisUrl = readRequiredEnvironmentValue(
-    environment,
-    "UPSTASH_REDIS_REST_URL",
-  );
-  const redisToken = readRequiredEnvironmentValue(
-    environment,
-    "UPSTASH_REDIS_REST_TOKEN",
-  );
+  const redisCredentials = readRedisCredentials(environment);
   const namespace = resolveNamespace(environment);
 
   if (
-    redisUrl === null ||
-    redisToken === null ||
-    !isValidRedisUrl(redisUrl) ||
+    redisCredentials === null ||
     namespace === null
   ) {
     return null;
@@ -238,8 +255,8 @@ function readConfiguration(environment: Environment): InternalConfiguration | nu
   }
 
   return {
-    redisUrl,
-    redisToken,
+    redisUrl: redisCredentials.url,
+    redisToken: redisCredentials.token,
     public: {
       namespace,
       triage: {

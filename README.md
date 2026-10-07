@@ -41,14 +41,27 @@ A proteção contra tentativas repetidas de login deverá receber rate limiting 
 
 ### Guardrails distribuídos para IA paga
 
-O fundamento server-only de rate limiting distribuído já está preparado, mas ainda não existe endpoint pago de triagem e nenhuma rota o utiliza. Antes de habilitar esse endpoint, é obrigatório configurar o Upstash Redis no servidor:
+O fundamento server-only de rate limiting distribuído já está preparado, mas ainda não existe endpoint pago de triagem e nenhuma rota o utiliza. Antes de habilitar esse endpoint, é obrigatório configurar o Redis no servidor usando um dos pares abaixo.
+
+Credenciais diretas do Upstash:
 
 ```env
 UPSTASH_REDIS_REST_URL=
 UPSTASH_REDIS_REST_TOKEN=
 ```
 
-As variáveis acima nunca devem usar `NEXT_PUBLIC_`, ser impressas ou ser versionadas. A configuração opcional também é server-only:
+Ou credenciais do recurso Upstash provisionado pelo Vercel Marketplace:
+
+```env
+KV_REST_API_URL=
+KV_REST_API_TOKEN=
+```
+
+O setup do Vercel Marketplace usado atualmente por este projeto fornece o par `KV_REST_API_*`. Quando os dois pares estiverem completos, as variáveis diretas `UPSTASH_*` têm precedência. Se qualquer variável `UPSTASH_*` estiver explicitamente configurada, o par direto é obrigatório: um par parcial ou inválido falha fechado e não usa o par do Marketplace. O mesmo vale para um par `KV_REST_API_*` parcial ou inválido quando não há par direto. `KV_REST_API_READ_ONLY_TOKEN`, `KV_URL` e `REDIS_URL` não são usados pelo guardrail.
+
+Todos esses valores são exclusivamente server-only: nunca use prefixo `NEXT_PUBLIC_`, imprima ou versione esses valores. Preview e Production continuam isolados por namespace e por configuração de ambiente. Ainda não existe endpoint pago.
+
+A configuração opcional também é server-only:
 
 ```env
 AI_RATE_LIMIT_NAMESPACE=
