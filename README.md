@@ -60,13 +60,13 @@ O modo dry-run não faz chamadas de rede:
 npm run ai:evaluate -- --dry-run
 ```
 
-Uma execução real é explicitamente paga/de rede e deve usar o ambiente Preview do projeto Vercel, sem gravar segredos em disco:
+Uma execução real é explicitamente paga/de rede. `OPENROUTER_API_KEY` deve estar disponível no ambiente local do processo por meio do fluxo de gerenciamento de segredos do desenvolvedor. Nunca imprima, persista ou versione a chave. Em seguida, execute:
 
 ```bash
-vercel env run -e preview -- npm run ai:evaluate -- --allow-network
+npm run ai:evaluate -- --allow-network
 ```
 
-Use somente fixtures sintéticas. O prompt de produção não é alterado por este checkpoint.
+Use somente fixtures sintéticas. O harness invoca a implementação real de triagem em produção, mas não reescreve nem substitui o prompt de produção em tempo de execução. Os resultados comportamentais exigem revisão humana.
 
 ---
 
