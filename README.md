@@ -24,6 +24,21 @@
 * Firebase Firestore
 * Vercel
 
+## Sessão administrativa de IA
+
+O `/sky` é intencionalmente público e continua acessível aos professores. A fundação de sessão assinada criada no servidor fica reservada para futuras configurações administrativas de IA e endpoints de invocação paga. Quando essa superfície existir, configure duas variáveis fortes e independentes no ambiente do servidor:
+
+```env
+AI_ADMIN_PASSWORD=
+AI_SESSION_SECRET=
+```
+
+Essas variáveis são exclusivamente server-only: não use prefixo `NEXT_PUBLIC_`, não as coloque no código do navegador e não as versione. A aplicação falha fechada quando qualquer uma delas está ausente. A sessão é armazenada apenas em cookie `HttpOnly`, com validade finita, e não é persistida no Firestore, `localStorage` ou `sessionStorage`.
+
+A sessão protegerá somente a futura administração de IA e os endpoints pagos correspondentes; ela não concede nem aplica permissões do Firestore. As operações do Firestore executadas pelo navegador continuam autorizadas pelas Firebase Security Rules implantadas. As credenciais do OpenRouter permanecerão server-only, e esta etapa ainda não oferece UI de configuração de chave nem endpoint de IA.
+
+A proteção contra tentativas repetidas de login deverá receber rate limiting apropriado quando a superfície administrativa de IA for habilitada.
+
 ## Fundação de triagem por IA
 
 A integração server-only com OpenRouter permanece sem rota pública até uma etapa futura. Quando for habilitada, configure apenas no ambiente do servidor:
