@@ -50,6 +50,24 @@ OPENROUTER_MODEL=deepseek/deepseek-v4-flash-0731
 
 A conta OpenRouter e a chave devem ter um limite baixo de gastos ou outro guardrail de orçamento.
 
+### Harness local de avaliação comportamental
+
+O harness `ai:evaluate` verifica o comportamento atual da triagem pedagógica com fixtures sintéticas versionadas. Ele é uma ferramenta de desenvolvimento, não uma certificação automatizada de segurança de moderação: não altera a UI, não usa Firestore, não executa ações de moderação, não cria integração HTTP e não persiste resultados. Os resultados comportamentais exigem interpretação humana.
+
+O modo dry-run não faz chamadas de rede:
+
+```bash
+npm run ai:evaluate -- --dry-run
+```
+
+Uma execução real é explicitamente paga/de rede. `OPENROUTER_API_KEY` deve estar disponível no ambiente local do processo por meio do fluxo de gerenciamento de segredos do desenvolvedor. Nunca imprima, persista ou versione a chave. Em seguida, execute:
+
+```bash
+npm run ai:evaluate -- --allow-network
+```
+
+Use somente fixtures sintéticas. O harness invoca a implementação real de triagem em produção, mas não reescreve nem substitui o prompt de produção em tempo de execução. Os resultados comportamentais exigem revisão humana.
+
 ---
 
 # Conceitos
