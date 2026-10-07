@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "ai:evaluate": "node --conditions=react-server --import tsx scripts/evaluate-ai-triage.ts",
-    "test:ai-guardrails": "node --conditions=react-server --import tsx --test tests/ai-guardrails.test.ts"
+    "test:ai-guardrails": "node --conditions=react-server --import tsx --test tests/ai-guardrails.test.ts tests/ai-routes.test.ts"
   },
   "dependencies": {
     "@upstash/ratelimit": "2.2.0",

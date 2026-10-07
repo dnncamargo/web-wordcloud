@@ -35,13 +35,13 @@ AI_SESSION_SECRET=
 
 Essas variáveis são exclusivamente server-only: não use prefixo `NEXT_PUBLIC_`, não as coloque no código do navegador e não as versione. A aplicação falha fechada quando qualquer uma delas está ausente. A sessão é armazenada apenas em cookie `HttpOnly`, tem validade de 8 horas e não é persistida no Firestore, `localStorage` ou `sessionStorage`.
 
-A sessão protege somente a futura administração de IA e os endpoints pagos correspondentes; ela não concede nem aplica permissões do Firestore. As operações do Firestore executadas pelo navegador continuam autorizadas pelas Firebase Security Rules implantadas. A chave do OpenRouter permanece somente no ambiente do servidor: não existe entrada, armazenamento ou exposição dessa chave no navegador. Este checkpoint ainda não oferece endpoint de IA pago.
+A sessão protege somente a administração de IA e o endpoint pago correspondente; ela não concede nem aplica permissões do Firestore. As operações do Firestore executadas pelo navegador continuam autorizadas pelas Firebase Security Rules implantadas. A chave do OpenRouter permanece somente no ambiente do servidor: não existe entrada, armazenamento ou exposição dessa chave no navegador.
 
-A proteção contra tentativas repetidas de login deverá receber rate limiting apropriado antes que qualquer endpoint de invocação paga seja habilitado. Este checkpoint não conclui a segurança do endpoint pago.
+O login administrativo agora usa throttling distribuído por cliente e por aplicação. Tentativas com identidade de cliente Vercel ausente ou inválida falham fechado; GET e DELETE não consomem a quota de login.
 
 ### Guardrails distribuídos para IA paga
 
-O fundamento server-only de rate limiting distribuído já está preparado, mas ainda não existe endpoint pago de triagem e nenhuma rota o utiliza. Antes de habilitar esse endpoint, é obrigatório configurar o Redis no servidor usando um dos pares abaixo.
+O endpoint autenticado `POST /api/ai/triage` exige uma sessão de AI-admin válida e usa rate limiting distribuído com burst deslizante e orçamento de janela fixa. Antes de habilitar chamadas pagas, é obrigatório configurar o Redis no servidor usando um dos pares abaixo.
 
 Credenciais diretas do Upstash:
 
@@ -59,7 +59,7 @@ KV_REST_API_TOKEN=
 
 O setup do Vercel Marketplace usado atualmente por este projeto fornece o par `KV_REST_API_*`. Quando os dois pares estiverem completos, as variáveis diretas `UPSTASH_*` têm precedência. Se qualquer variável `UPSTASH_*` estiver explicitamente configurada, o par direto é obrigatório: um par parcial ou inválido falha fechado e não usa o par do Marketplace. O mesmo vale para um par `KV_REST_API_*` parcial ou inválido quando não há par direto. `KV_REST_API_READ_ONLY_TOKEN`, `KV_URL` e `REDIS_URL` não são usados pelo guardrail.
 
-Todos esses valores são exclusivamente server-only: nunca use prefixo `NEXT_PUBLIC_`, imprima ou versione esses valores. Preview e Production continuam isolados por namespace e por configuração de ambiente. Ainda não existe endpoint pago.
+Todos esses valores são exclusivamente server-only: nunca use prefixo `NEXT_PUBLIC_`, imprima ou versione esses valores. Preview e Production continuam isolados por namespace e por configuração de ambiente. O Preview deste projeto atualmente tem Redis do Marketplace configurado. Production ainda não tem configuração Redis do Marketplace; portanto, a triagem paga não deve ser considerada habilitada em Production.
 
 A configuração opcional também é server-only:
 
@@ -73,13 +73,11 @@ AI_TRIAGE_DAILY_WINDOW_SECONDS=86400
 
 Os contadores de produção e preview são isolados por padrão. O guardrail de IA paga falha fechado quando o Redis está ausente, inválido, indisponível ou quando uma resposta do limiter é inesperada; não há fallback em memória. O timeout de rate limiting também nunca autoriza uma invocação. O limite de gastos da conta OpenRouter continua sendo um guardrail secundário.
 
-Este checkpoint somente prepara a infraestrutura e a validação de entrada para a etapa seguinte; não oferece ainda endpoint pago, não chama OpenRouter por uma rota e não altera a rota de sessão administrativa.
-
-Quando a futura rota autenticada receber `pendingWords` vazio, a triagem pode retornar `[]` sem Redis e sem chamar OpenRouter.
+Falhas e timeouts do Redis falham fechado com `503`. Quando a rota recebe `pendingWords` vazio, retorna `[]` sem Redis e sem chamar OpenRouter. A rota só produz sugestões: nunca aceita, rejeita ou mescla automaticamente. Nenhuma UI de triagem está conectada ainda.
 
 ## Fundação de triagem por IA
 
-A integração server-only com OpenRouter permanece sem rota pública até uma etapa futura. Quando for habilitada, configure apenas no ambiente do servidor:
+A integração server-only com OpenRouter é usada somente pela rota autenticada de triagem. Configure apenas no ambiente do servidor:
 
 ```env
 OPENROUTER_API_KEY=
