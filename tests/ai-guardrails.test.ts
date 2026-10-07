@@ -23,7 +23,13 @@ import {
 
 const redisEnvironment = {
   UPSTASH_REDIS_REST_URL: "https://example.upstash.io",
-  UPSTASH_REDIS_REST_TOKEN: "test-token",
+  UPSTASH_REDIS_REST_TOKEN: "direct-token-placeholder",
+  VERCEL_ENV: "preview",
+};
+
+const marketplaceRedisEnvironment = {
+  KV_REST_API_URL: "https://marketplace.example.upstash.io",
+  KV_REST_API_TOKEN: "marketplace-token-placeholder",
   VERCEL_ENV: "preview",
 };
 
@@ -36,11 +42,12 @@ function createFakeOptions(
   responses: readonly (LimiterResponse | Error | unknown)[],
   captured: Array<Record<string, unknown>> = [],
   calls: Array<Readonly<{ prefix: string; identifier: string }>> = [],
+  environment: Readonly<Record<string, string | undefined>> = redisEnvironment,
 ): AiGuardrailsOptions {
   let responseIndex = 0;
 
   return {
-    environment: redisEnvironment,
+    environment,
     createRedis: (config) => {
       assert.equal(config.enableTelemetry, false);
       return { kind: "fake-redis" };
@@ -155,6 +162,94 @@ test("missing or invalid explicit configuration fails closed", async () => {
     },
   });
   assert.equal((await insecureRedis.authorizePaidTriage()).status, "unavailable");
+});
+
+test("complete marketplace credentials work when direct credentials are absent", async () => {
+  const guardrails = createAiGuardrails(
+    createFakeOptions(
+      [{ success: true }, { success: true }],
+      [],
+      [],
+      marketplaceRedisEnvironment,
+    ),
+  );
+
+  assert.equal((await guardrails.authorizePaidTriage()).status, "allowed");
+});
+
+test("complete direct credentials take precedence over complete marketplace credentials", async () => {
+  const redisConfigs: Array<Readonly<Record<string, unknown>>> = [];
+  const guardrails = createAiGuardrails({
+    environment: {
+      ...redisEnvironment,
+      ...marketplaceRedisEnvironment,
+    },
+    createRedis: (config) => {
+      redisConfigs.push(config);
+      return { kind: "fake-redis" };
+    },
+    createLimiter: () => ({ limit: async () => ({ success: true }) }),
+  });
+
+  assert.equal((await guardrails.authorizePaidTriage()).status, "allowed");
+  assert.equal(redisConfigs.length, 1);
+  assert.deepEqual(Object.keys(redisConfigs[0] ?? {}).sort(), [
+    "enableTelemetry",
+    "token",
+    "url",
+  ]);
+  assert.equal(redisConfigs[0]?.url, redisEnvironment.UPSTASH_REDIS_REST_URL);
+  assert.equal(redisConfigs[0]?.token, redisEnvironment.UPSTASH_REDIS_REST_TOKEN);
+  assert.equal(redisConfigs[0]?.enableTelemetry, false);
+});
+
+test("partial or invalid direct credentials do not fall back to marketplace credentials", async () => {
+  const partialDirect = createAiGuardrails({
+    environment: {
+      ...marketplaceRedisEnvironment,
+      UPSTASH_REDIS_REST_URL: redisEnvironment.UPSTASH_REDIS_REST_URL,
+    },
+  });
+  assert.equal((await partialDirect.authorizePaidTriage()).status, "unavailable");
+
+  const insecureDirect = createAiGuardrails({
+    environment: {
+      ...marketplaceRedisEnvironment,
+      UPSTASH_REDIS_REST_URL: "http://example.upstash.io",
+      UPSTASH_REDIS_REST_TOKEN: redisEnvironment.UPSTASH_REDIS_REST_TOKEN,
+    },
+  });
+  assert.equal((await insecureDirect.authorizePaidTriage()).status, "unavailable");
+});
+
+test("partial or insecure marketplace credentials fail closed", async () => {
+  const partialMarketplace = createAiGuardrails({
+    environment: {
+      KV_REST_API_URL: marketplaceRedisEnvironment.KV_REST_API_URL,
+      VERCEL_ENV: "preview",
+    },
+  });
+  assert.equal((await partialMarketplace.authorizePaidTriage()).status, "unavailable");
+
+  const insecureMarketplace = createAiGuardrails({
+    environment: {
+      KV_REST_API_URL: "http://marketplace.example.upstash.io",
+      KV_REST_API_TOKEN: marketplaceRedisEnvironment.KV_REST_API_TOKEN,
+      VERCEL_ENV: "preview",
+    },
+  });
+  assert.equal((await insecureMarketplace.authorizePaidTriage()).status, "unavailable");
+});
+
+test("unsupported Redis environment variables are ignored", async () => {
+  for (const environment of [
+    { KV_REST_API_READ_ONLY_TOKEN: "read-only-token-placeholder" },
+    { KV_URL: "redis://example" },
+    { REDIS_URL: "redis://example" },
+  ]) {
+    const guardrails = createAiGuardrails({ environment });
+    assert.equal((await guardrails.authorizePaidTriage()).status, "unavailable");
+  }
 });
 
 test("guardrails short-circuit sequentially and keep the global triage identifier", async () => {
