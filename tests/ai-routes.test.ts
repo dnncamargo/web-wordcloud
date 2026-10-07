@@ -39,7 +39,7 @@ function loginRequest(
     headers: {
       origin,
       "content-type": "application/json",
-      "x-vercel-forwarded-for": "203.0.113.10",
+      "x-forwarded-for": "203.0.113.10",
       ...headers,
     },
     body: typeof body === "string" ? body : JSON.stringify(body),
@@ -72,6 +72,7 @@ function assertNoStore(response: Response) {
 function createLoginHandlers(options: {
   decision?: GuardrailDecision;
   identity?: { source: "platform-forwarded-for"; value: string } | null;
+  trustedEnvironment?: Readonly<Record<string, string | undefined>>;
   provider?: boolean;
   passwordMatches?: boolean;
 } = {}) {
@@ -104,10 +105,15 @@ function createLoginHandlers(options: {
       calls.limiter += 1;
       return options.decision ?? { status: "allowed" };
     },
-    getClientIdentity: () =>
-      options.identity === undefined
+    getClientIdentity: (request) => {
+      if (options.trustedEnvironment !== undefined) {
+        return getTrustedAiLoginIdentity(request, options.trustedEnvironment);
+      }
+
+      return options.identity === undefined
         ? { source: "platform-forwarded-for", value: "203.0.113.10" }
-        : options.identity,
+        : options.identity;
+    },
   });
 
   return { calls, handlers };
@@ -162,7 +168,7 @@ test("login rejects malformed, wrong-media, and wrong-origin requests before Red
   }
 });
 
-test("valid login checks the client limiter before password comparison", async () => {
+test("valid deployed Vercel login checks the client limiter before password comparison", async () => {
   const order: string[] = [];
   const handlers = createAiAdminSessionHandlers({
     getSession: async () => null,
@@ -179,7 +185,8 @@ test("valid login checks the client limiter before password comparison", async (
       order.push("limiter");
       return { status: "allowed" };
     },
-    getClientIdentity: () => ({ source: "platform-forwarded-for", value: "203.0.113.10" }),
+    getClientIdentity: (request) =>
+      getTrustedAiLoginIdentity(request, { VERCEL: "1" }),
   });
 
   const response = await handlers.POST(loginRequest());
@@ -214,28 +221,59 @@ test("failed password attempts consume the allowed login quota", async () => {
 });
 
 test("missing or invalid trusted client identity fails closed", async () => {
-  const { calls, handlers } = createLoginHandlers({ identity: null });
-  const response = await handlers.POST(loginRequest());
-  assert.equal(response.status, 503);
+  const { calls, handlers } = createLoginHandlers({ trustedEnvironment: { VERCEL: "1" } });
+  const requests = [
+    loginRequest({ password: "correct" }, { "x-forwarded-for": "" }),
+    new Request(`${origin}/api/ai/admin/session`, {
+      method: "POST",
+      headers: { origin, "content-type": "application/json" },
+      body: JSON.stringify({ password: "correct" }),
+    }),
+  ];
+
+  for (const request of requests) {
+    const response = await handlers.POST(request);
+    assert.equal(response.status, 503);
+  }
+
   assert.equal(calls.limiter, 0);
   assert.equal(calls.password, 0);
+  assert.equal(calls.session, 0);
 });
 
-test("trusted client identity accepts only one valid Vercel IP header", () => {
+test("trusted client identity accepts only one valid Vercel x-forwarded-for IP", () => {
   for (const value of [undefined, "", "not-an-ip", "203.0.113.10, 198.51.100.7"]) {
     const headers: Record<string, string> = {};
-    if (value !== undefined) headers["x-vercel-forwarded-for"] = value;
+    if (value !== undefined) headers["x-forwarded-for"] = value;
     const request = new Request(`${origin}/api/ai/admin/session`, { headers });
-    assert.equal(getTrustedAiLoginIdentity(request), null);
+    assert.equal(getTrustedAiLoginIdentity(request, { VERCEL: "1" }), null);
   }
 
   const request = new Request(`${origin}/api/ai/admin/session`, {
-    headers: { "x-vercel-forwarded-for": " 2001:DB8::1 " },
+    headers: { "x-forwarded-for": " 2001:DB8::1 " },
   });
-  assert.deepEqual(getTrustedAiLoginIdentity(request), {
+  assert.deepEqual(getTrustedAiLoginIdentity(request, { VERCEL: "1" }), {
     source: "platform-forwarded-for",
     value: "2001:db8::1",
   });
+
+  const ipv4Request = new Request(`${origin}/api/ai/admin/session`, {
+    headers: { "x-forwarded-for": "203.0.113.10" },
+  });
+  assert.deepEqual(getTrustedAiLoginIdentity(ipv4Request, { VERCEL: "1" }), {
+    source: "platform-forwarded-for",
+    value: "203.0.113.10",
+  });
+
+  const aliasRequest = new Request(`${origin}/api/ai/admin/session`, {
+    headers: { "x-vercel-forwarded-for": "203.0.113.10" },
+  });
+  assert.equal(getTrustedAiLoginIdentity(aliasRequest, { VERCEL: "1" }), null);
+
+  const outsideVercelRequest = new Request(`${origin}/api/ai/admin/session`, {
+    headers: { "x-forwarded-for": "203.0.113.10" },
+  });
+  assert.equal(getTrustedAiLoginIdentity(outsideVercelRequest, {}), null);
 });
 
 test("login GET and DELETE do not consume login quota", async () => {
