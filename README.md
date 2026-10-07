@@ -35,6 +35,8 @@ SKY_SESSION_SECRET=
 
 Essas variáveis são exclusivamente server-only: não use prefixo `NEXT_PUBLIC_`, não as coloque no código do navegador e não as versione. A aplicação falha fechada quando qualquer uma delas está ausente. A sessão é armazenada apenas em cookie `HttpOnly`, com validade finita, e não é persistida no Firestore, `localStorage` ou `sessionStorage`.
 
+A sessão assinada protege a superfície web do `/sky` e pode ser reutilizada por endpoints administrativos server-only. As operações do Firestore executadas pelo navegador continuam autorizadas pelas Firebase Security Rules implantadas; o cookie de sessão do Sky não concede nem aplica permissões do Firestore.
+
 A proteção contra tentativas repetidas de login ainda deve receber rate limiting apropriado para o ambiente de produção em uma etapa futura.
 
 ## Fundação de triagem por IA
