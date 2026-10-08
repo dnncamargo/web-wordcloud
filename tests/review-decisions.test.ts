@@ -12,6 +12,7 @@ import {
   prepareCanonicalWordChange,
 } from "../lib/firebase/canonicalWord";
 import {
+  getAcceptedMergeDocumentRoles,
   getAcceptedMergeCanonicalCandidates,
   getAcceptedMergePairKey,
   prepareAcceptedWordMerge,
@@ -144,6 +145,42 @@ test("accepted merge is explicit and prepares a count-preserving canonical choic
       aliases: ["Escutar", "Ouvir"],
     },
   });
+});
+
+test("accepted merge survivor and absorbed document are independent of pair order", () => {
+  assert.deepEqual(
+    getAcceptedMergeDocumentRoles("word-a", "word-b"),
+    { survivorId: "word-a", absorbedId: "word-b" },
+  );
+  assert.deepEqual(
+    getAcceptedMergeDocumentRoles("word-b", "word-a"),
+    { survivorId: "word-a", absorbedId: "word-b" },
+  );
+
+  const first = { id: "word-a", text: "Escutar", count: 3, aliases: ["Ouvir"] };
+  const second = { id: "word-b", text: "Escutar melhor", count: 2, aliases: ["Ouvir"] };
+
+  for (const canonicalText of ["Escutar", "Escutar melhor"]) {
+    const forward = prepareAcceptedWordMerge(first, second, canonicalText);
+    const reverse = prepareAcceptedWordMerge(second, first, canonicalText);
+
+    assert.equal(forward.kind, "update");
+    assert.equal(reverse.kind, "update");
+    if (forward.kind === "update" && reverse.kind === "update") {
+      assert.equal(forward.change.text, reverse.change.text);
+      assert.equal(forward.change.count, reverse.change.count);
+      assert.deepEqual(new Set(forward.change.aliases), new Set(reverse.change.aliases));
+    }
+    assert.deepEqual(getAcceptedMergeDocumentRoles("word-a", "word-b"), {
+      survivorId: "word-a",
+      absorbedId: "word-b",
+    });
+    assert.deepEqual(getAcceptedMergeDocumentRoles("word-b", "word-a"), {
+      survivorId: "word-a",
+      absorbedId: "word-b",
+    });
+  }
+  assert.deepEqual(getAcceptedMergeDocumentRoles("word-a", "word-a"), null);
 });
 
 test("stale accepted merge pair or canonical choice is rejected", () => {

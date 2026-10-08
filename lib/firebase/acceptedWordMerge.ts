@@ -16,12 +16,31 @@ export type AcceptedWordMergeDecision =
       }>;
     }>;
 
+export type AcceptedMergeDocumentRoles = Readonly<{
+  survivorId: string;
+  absorbedId: string;
+}>;
+
 function getWordForms(word: Pick<AcceptedMergeWord, "text" | "aliases">) {
   return [word.text, ...(word.aliases ?? [])];
 }
 
 export function getAcceptedMergePairKey(firstId: string, secondId: string) {
   return JSON.stringify([firstId, secondId].sort());
+}
+
+export function getAcceptedMergeDocumentRoles(
+  firstId: string,
+  secondId: string,
+): AcceptedMergeDocumentRoles | null {
+  if (firstId === secondId) return null;
+
+  const survivorId = firstId < secondId ? firstId : secondId;
+
+  return {
+    survivorId,
+    absorbedId: survivorId === firstId ? secondId : firstId,
+  };
 }
 
 export function getAcceptedMergeCanonicalCandidates(

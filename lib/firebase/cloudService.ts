@@ -5,7 +5,10 @@ import {
   prepareOriginalApprovedWord,
 } from "@/lib/firebase/wordApproval";
 import { prepareCanonicalWordChange } from "@/lib/firebase/canonicalWord";
-import { prepareAcceptedWordMerge } from "@/lib/firebase/acceptedWordMerge";
+import {
+  getAcceptedMergeDocumentRoles,
+  prepareAcceptedWordMerge,
+} from "@/lib/firebase/acceptedWordMerge";
 import { addDoc, collection, deleteDoc, doc, getDoc, increment, onSnapshot, runTransaction, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
 
 export type FirebaseCloud = {
@@ -442,38 +445,38 @@ export async function mergeAcceptedWords(
   secondWordId: string,
   canonicalText: string,
 ) {
-  const firstWordRef = doc(db, "clouds", cloudId, "words", firstWordId);
-  const secondWordRef = doc(db, "clouds", cloudId, "words", secondWordId);
+  const documentRoles = getAcceptedMergeDocumentRoles(firstWordId, secondWordId);
+
+  if (!documentRoles) return false;
+
+  const survivorWordRef = doc(db, "clouds", cloudId, "words", documentRoles.survivorId);
+  const absorbedWordRef = doc(db, "clouds", cloudId, "words", documentRoles.absorbedId);
 
   return runTransaction(db, async (transaction) => {
-    const firstWordSnapshot = await transaction.get(firstWordRef);
-    const secondWordSnapshot = await transaction.get(secondWordRef);
+    const survivorWordSnapshot = await transaction.get(survivorWordRef);
+    const absorbedWordSnapshot = await transaction.get(absorbedWordRef);
 
-    if (
-      firstWordId === secondWordId ||
-      !firstWordSnapshot.exists() ||
-      !secondWordSnapshot.exists()
-    ) {
+    if (!survivorWordSnapshot.exists() || !absorbedWordSnapshot.exists()) {
       return false;
     }
 
-    const firstWordData = firstWordSnapshot.data();
-    const secondWordData = secondWordSnapshot.data();
+    const survivorWordData = survivorWordSnapshot.data();
+    const absorbedWordData = absorbedWordSnapshot.data();
     const decision = prepareAcceptedWordMerge(
       {
-        id: firstWordSnapshot.id,
-        text: String(firstWordData.text ?? ""),
-        count: Number(firstWordData.count ?? 0),
-        aliases: Array.isArray(firstWordData.aliases)
-          ? firstWordData.aliases.map(String)
+        id: survivorWordSnapshot.id,
+        text: String(survivorWordData.text ?? ""),
+        count: Number(survivorWordData.count ?? 0),
+        aliases: Array.isArray(survivorWordData.aliases)
+          ? survivorWordData.aliases.map(String)
           : [],
       },
       {
-        id: secondWordSnapshot.id,
-        text: String(secondWordData.text ?? ""),
-        count: Number(secondWordData.count ?? 0),
-        aliases: Array.isArray(secondWordData.aliases)
-          ? secondWordData.aliases.map(String)
+        id: absorbedWordSnapshot.id,
+        text: String(absorbedWordData.text ?? ""),
+        count: Number(absorbedWordData.count ?? 0),
+        aliases: Array.isArray(absorbedWordData.aliases)
+          ? absorbedWordData.aliases.map(String)
           : [],
       },
       canonicalText,
@@ -481,13 +484,13 @@ export async function mergeAcceptedWords(
 
     if (decision.kind !== "update") return false;
 
-    transaction.update(firstWordRef, {
+    transaction.update(survivorWordRef, {
       text: decision.change.text,
       count: decision.change.count,
       aliases: decision.change.aliases,
       updatedAt: serverTimestamp(),
     });
-    transaction.delete(secondWordRef);
+    transaction.delete(absorbedWordRef);
 
     return true;
   });
