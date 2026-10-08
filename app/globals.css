@@ -427,7 +427,7 @@ input {
 
 .accepted-clean-word {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
   align-items: center;
   gap: 8px;
 }
@@ -512,6 +512,33 @@ input {
 }
 
 .ai-suggestion-row button {
+  flex-shrink: 0;
+  padding: 0.5rem 0.58rem;
+  font-size: 0.72rem;
+}
+
+.selected-spelling-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 6px 0;
+  padding: 7px 8px;
+  border-radius: 7px;
+  background: rgba(16, 185, 129, 0.08);
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.3;
+}
+
+.selected-spelling-row strong {
+  display: inline;
+  margin: 0;
+  color: var(--foreground);
+  font-size: inherit;
+}
+
+.selected-spelling-row button {
   flex-shrink: 0;
   padding: 0.5rem 0.58rem;
   font-size: 0.72rem;
@@ -1026,7 +1053,7 @@ input {
 
 .accepted-clean-word {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 42px 56px 32px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 11rem) 42px 56px 32px;
   align-items: center;
   gap: 1px;
 }
@@ -1056,6 +1083,19 @@ input {
 
 .accepted-clean-word .merge-count.empty {
   visibility: hidden;
+}
+
+.canonical-form-select {
+  min-width: 0;
+  max-width: 11rem;
+  border: 0;
+  outline: 0;
+  border-radius: 6px;
+  padding: 0.3rem 0.35rem;
+  background: rgba(23, 32, 51, 0.05);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.72rem;
 }
 
 .remove-word-button {
