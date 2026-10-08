@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "ai:evaluate": "node --conditions=react-server --import tsx scripts/evaluate-ai-triage.ts",
+    "ai:export-firestore": "node --conditions=react-server --import tsx scripts/export-firestore-calibration.ts",
     "test:ai-guardrails": "node --conditions=react-server --import tsx --test tests/ai-guardrails.test.ts tests/ai-routes.test.ts tests/ai-sky-triage.test.ts"
   },
   "dependencies": {
