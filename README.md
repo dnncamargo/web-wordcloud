@@ -73,7 +73,7 @@ AI_TRIAGE_DAILY_WINDOW_SECONDS=86400
 
 Os contadores de produção e preview são isolados por padrão. O guardrail de IA paga falha fechado quando o Redis está ausente, inválido, indisponível ou quando uma resposta do limiter é inesperada; não há fallback em memória. O timeout de rate limiting também nunca autoriza uma invocação. O limite de gastos da conta OpenRouter continua sendo um guardrail secundário.
 
-Falhas e timeouts do Redis falham fechado com `503`. Quando a rota recebe `pendingWords` vazio, retorna `[]` sem Redis e sem chamar OpenRouter. A rota só produz sugestões: nunca aceita, rejeita ou mescla automaticamente. Nenhuma UI de triagem está conectada ainda.
+Falhas e timeouts do Redis falham fechado com `503`. Quando a rota recebe `pendingWords` vazio, retorna `[]` sem Redis e sem chamar OpenRouter. A análise no Sky é sempre explicitamente solicitada pelo professor e só produz sugestões: ordena as ideias pendentes, sinaliza atenção, sugere mesclagem e sugere ortografia. O resultado é efêmero no cliente; a IA nunca aceita, rejeita, mescla, corrige ou decide pelo professor.
 
 ## Fundação de triagem por IA
 
@@ -103,6 +103,8 @@ npm run ai:evaluate -- --allow-network
 ```
 
 Use somente fixtures sintéticas. O harness invoca a implementação real de triagem em produção, mas não reescreve nem substitui o prompt de produção em tempo de execução. Os resultados comportamentais exigem revisão humana.
+
+No Sky, o professor pode solicitar uma análise quando a sessão administrativa de IA está ativa. A interface mantém a ordem atual antes da análise; depois de um resultado completo, ordena as ideias sem exibir a relevância numérica. Mudanças na nuvem, pergunta, palavras aceitas ou ideias pendentes invalidam o resultado anterior sem iniciar uma nova análise.
 
 ---
 
@@ -142,7 +144,7 @@ Responsável por:
 * ativar nuvens;
 * arquivar nuvens.
 
-Submissões cuja chave é exatamente equivalente pela normalização determinística existente podem ser autoagregadas à palavra aceita, preservando sua grafia canônica. Similaridade semântica continua reservada para uma futura sugestão de IA.
+Cada decisão sobre uma nova ideia é feita pelo professor. A aprovação normal preserva a grafia enviada; quando o professor escolhe explicitamente uma sugestão de ortografia, a operação transacional usa a grafia escolhida sem reescrever a submissão original.
 
 ---
 
@@ -409,11 +411,14 @@ Sky:
 
 ## Inteligência Artificial
 
-* [ ] Sugestão automática de mesclagem
-* [ ] Correção ortográfica
-* [ ] Agrupamento semântico
-* [ ] Geração automática de categorias
-* [ ] Resumo das ideias
+No Sky, a IA é uma assistente de triagem sob comando do professor:
+
+* ordena ideias pendentes por relevância, sem exibir o número;
+* sinaliza discretamente itens para revisão com atenção;
+* sugere uma mesclagem, mas deixa a ação explícita para o professor;
+* sugere uma grafia alternativa, mantendo a original e exigindo aprovação explícita;
+* não aceita, rejeita, mescla, corrige, classifica ou decide automaticamente;
+* não persiste resultados: cada análise é efêmera no cliente.
 
 ---
 

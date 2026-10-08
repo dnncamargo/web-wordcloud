@@ -1,27 +1,18 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { Sparkles, X } from "lucide-react";
-
-type AiSessionState = {
-  configured: boolean;
-  authenticated: boolean;
-  model?: string;
-};
+import {
+  isAiSessionState,
+  type AiSessionState,
+} from "@/lib/ai/admin-session-contract";
 
 type RequestState = "idle" | "loading" | "submitting" | "logging-out";
 
-function isAiSessionState(value: unknown): value is AiSessionState {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-
-  const candidate = value as Record<string, unknown>;
-
-  return (
-    typeof candidate.configured === "boolean" &&
-    typeof candidate.authenticated === "boolean" &&
-    (candidate.model === undefined || typeof candidate.model === "string")
-  );
-}
+export type AiAdminControlProps = Readonly<{
+  onSessionChange?: (session: AiSessionState | null) => void;
+  sessionInvalidationToken?: number;
+}>;
 
 async function readSessionState(response: Response) {
   if (!response.ok) throw new Error("request-failed");
@@ -33,16 +24,22 @@ async function readSessionState(response: Response) {
   return payload;
 }
 
-export default function AiAdminControl() {
+export default function AiAdminControl({
+  onSessionChange,
+  sessionInvalidationToken = 0,
+}: AiAdminControlProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [session, setSession] = useState<AiSessionState | null>(null);
   const [password, setPassword] = useState("");
   const [requestState, setRequestState] = useState<RequestState>("idle");
   const [errorMessage, setErrorMessage] = useState("");
+  const onSessionChangeRef = useRef(onSessionChange);
 
   useEffect(() => {
-    if (!isOpen) return;
+    onSessionChangeRef.current = onSessionChange;
+  }, [onSessionChange]);
 
+  useEffect(() => {
     let isCurrent = true;
 
     void fetch("/api/ai/admin/session", {
@@ -54,11 +51,15 @@ export default function AiAdminControl() {
         if (!isCurrent) return;
 
         setSession(nextSession);
+        onSessionChangeRef.current?.(nextSession);
+        setErrorMessage("");
         setRequestState("idle");
       })
       .catch(() => {
         if (!isCurrent) return;
 
+        setSession(null);
+        onSessionChangeRef.current?.(null);
         setErrorMessage("Não foi possível verificar o estado da IA.");
         setRequestState("idle");
       });
@@ -66,11 +67,10 @@ export default function AiAdminControl() {
     return () => {
       isCurrent = false;
     };
-  }, [isOpen]);
+  }, [isOpen, sessionInvalidationToken]);
 
   function closePanel() {
     setIsOpen(false);
-    setSession(null);
     setPassword("");
     setErrorMessage("");
     setRequestState("idle");
@@ -78,7 +78,6 @@ export default function AiAdminControl() {
 
   function openPanel() {
     setIsOpen(true);
-    setSession(null);
     setPassword("");
     setErrorMessage("");
     setRequestState("loading");
@@ -101,6 +100,7 @@ export default function AiAdminControl() {
       if (!nextSession.authenticated) throw new Error("not-authenticated");
 
       setSession(nextSession);
+      onSessionChangeRef.current?.(nextSession);
       setPassword("");
     } catch {
       setPassword("");
@@ -122,6 +122,7 @@ export default function AiAdminControl() {
       const nextSession = await readSessionState(response);
 
       setSession(nextSession);
+      onSessionChangeRef.current?.(nextSession);
     } catch {
       setErrorMessage("Não foi possível desativar a IA.");
     } finally {
@@ -170,12 +171,11 @@ export default function AiAdminControl() {
             ) : !session.configured ? (
               <div className="ai-admin-panel-content">
                 <p className="ai-admin-panel-status">IA não configurada neste servidor.</p>
-                <p className="ai-admin-panel-description">A chave do OpenRouter precisa ser configurada no ambiente do servidor.</p>
+                <p className="ai-admin-panel-description">A chave do serviço precisa ser configurada no ambiente do servidor.</p>
               </div>
             ) : session.authenticated ? (
               <div className="ai-admin-panel-content">
                 <p className="ai-admin-panel-status">IA ativa nesta sessão.</p>
-                {session.model && <p className="ai-admin-panel-description">Modelo: {session.model}</p>}
                 <button className="button ai-admin-panel-action" onClick={handleLogout} disabled={requestState === "logging-out"} type="button">
                   {requestState === "logging-out" ? "Desativando..." : "Desativar IA"}
                 </button>
