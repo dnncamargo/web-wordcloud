@@ -129,6 +129,13 @@ export function orderTriageWords<TWord extends TriageWord>(
     }));
 }
 
+export function shouldShowPendingManualMerge(
+  hasCurrentAnalysis: boolean,
+  attention: boolean,
+) {
+  return !hasCurrentAnalysis || !attention;
+}
+
 export function isMeaningfullyDifferentSpelling(
   submittedText: string,
   suggestion: string | null,

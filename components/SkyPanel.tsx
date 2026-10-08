@@ -47,6 +47,7 @@ import {
   isTriageRequestEligible,
   isTriageSnapshotCurrent,
   orderTriageWords,
+  shouldShowPendingManualMerge,
   readTriageResponse,
   type TriageDisplayItem,
   type TriageSnapshot,
@@ -131,6 +132,7 @@ export default function SkyPanel() {
       attention: false,
       spellingSuggestion: null,
     }));
+  const hasCurrentAnalysis = currentAnalysisItems !== null;
 
   useEffect(() => {
     latestTriageSnapshotRef.current = currentTriageSnapshot;
@@ -826,17 +828,19 @@ export default function SkyPanel() {
                   </button>
                 </div>
 
-                <select defaultValue="" onChange={(event) => handleMerge(word, event.target.value)} disabled={words.length === 0}>
-                  <option value="" disabled>
-                    Mesclar com...
-                  </option>
-
-                  {words.map((acceptedWord) => (
-                    <option key={acceptedWord.id} value={acceptedWord.id}>
-                      {acceptedWord.text}
+                {shouldShowPendingManualMerge(hasCurrentAnalysis, attention) && (
+                  <select defaultValue="" onChange={(event) => handleMerge(word, event.target.value)} disabled={words.length === 0}>
+                    <option value="" disabled>
+                      Mesclar com...
                     </option>
-                  ))}
-                </select>
+
+                    {words.map((acceptedWord) => (
+                      <option key={acceptedWord.id} value={acceptedWord.id}>
+                        {acceptedWord.text}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </article>
               );
             })
