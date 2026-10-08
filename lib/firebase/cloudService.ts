@@ -4,6 +4,7 @@ import {
   prepareApprovedWordReplacement,
   prepareOriginalApprovedWord,
 } from "@/lib/firebase/wordApproval";
+import { prepareCanonicalWordChange } from "@/lib/firebase/canonicalWord";
 import { addDoc, collection, deleteDoc, doc, getDoc, increment, onSnapshot, runTransaction, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
 
 export type FirebaseCloud = {
@@ -397,6 +398,37 @@ export async function mergeNewWordIntoWord(cloudId: string, newWord: FirebaseNew
       status: "merged",
       mergedIntoWordId: targetWord.id,
       reviewedAt: serverTimestamp(),
+    });
+
+    return true;
+  });
+}
+
+export async function chooseCanonicalWordForm(
+  cloudId: string,
+  wordId: string,
+  candidate: string,
+) {
+  const wordRef = doc(db, "clouds", cloudId, "words", wordId);
+
+  return runTransaction(db, async (transaction) => {
+    const wordSnapshot = await transaction.get(wordRef);
+
+    if (!wordSnapshot.exists()) return false;
+
+    const wordData = wordSnapshot.data();
+    const currentText = String(wordData.text ?? "");
+    const currentAliases = Array.isArray(wordData.aliases)
+      ? wordData.aliases.map(String)
+      : [];
+    const decision = prepareCanonicalWordChange(currentText, currentAliases, candidate);
+
+    if (decision.kind !== "update") return false;
+
+    transaction.update(wordRef, {
+      text: decision.change.text,
+      aliases: decision.change.aliases,
+      updatedAt: serverTimestamp(),
     });
 
     return true;

@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   activateCloud,
-  autoAggregateEquivalentNewWord,
   approveNewWord,
   approveNewWordAs,
   archiveCloud,
@@ -12,6 +11,7 @@ import {
   FirebaseCloud,
   FirebaseNewWord,
   FirebaseWord,
+  chooseCanonicalWordForm,
   listenClouds,
   listenGlobalSettings,
   listenNewWords,
@@ -23,8 +23,14 @@ import {
   updateWordText,
   blowWind,
 } from "@/lib/firebase/cloudService";
-import { normalizeWord } from "@/lib/normalizeWord";
-import { findUniqueExactAcceptedWord } from "@/lib/firebase/autoAggregation";
+import { getCanonicalWordCandidates } from "@/lib/firebase/canonicalWord";
+import {
+  clearPendingSpelling,
+  getPendingApprovalPlan,
+  getPendingMergePlan,
+  selectPendingSpelling,
+  type PendingSpellingSelections,
+} from "@/lib/reviewDecisions";
 import AiAdminControl from "@/components/AiAdminControl";
 import type { AiSessionState } from "@/lib/ai/admin-session-contract";
 import {
@@ -72,9 +78,9 @@ export default function SkyPanel() {
   const [analysisError, setAnalysisError] = useState("");
   const [analysisRevision, setAnalysisRevision] = useState(0);
   const [analysisResultRevision, setAnalysisResultRevision] = useState<number | null>(null);
+  const [selectedSpellings, setSelectedSpellings] = useState<PendingSpellingSelections>({});
   const analysisInFlightRef = useRef(false);
   const analysisRevisionRef = useRef(0);
-  const autoAggregationStateRef = useRef(new Map<string, "processing" | "completed">());
 
   const selectedCloud = clouds.find((cloud) => cloud.id === selectedCloudId) ?? null;
   const visibleClouds = clouds.filter((cloud) => (showArchivedClouds ? cloud.status === "archived" : cloud.status !== "archived"));
@@ -118,6 +124,7 @@ export default function SkyPanel() {
     setAnalysisSnapshot(null);
     setAnalysisItems(null);
     setAnalysisError("");
+    setSelectedSpellings({});
   }, []);
 
   useEffect(() => {
@@ -172,47 +179,6 @@ export default function SkyPanel() {
       unsubscribeNewWords();
     };
   }, [invalidateAnalysis, selectedCloudId]);
-
-  useEffect(() => {
-    if (!selectedCloudId) return;
-
-    const pendingWordIds = new Set(newWords.map((word) => word.id));
-
-    for (const key of autoAggregationStateRef.current.keys()) {
-      const [cloudId, newWordId] = key.split("::");
-
-      if (cloudId === selectedCloudId && !pendingWordIds.has(newWordId)) {
-        autoAggregationStateRef.current.delete(key);
-      }
-    }
-
-    if (words.length === 0 || newWords.length === 0) return;
-
-    for (const newWord of newWords) {
-      const targetWord = findUniqueExactAcceptedWord(newWord.text, words);
-
-      if (!targetWord) continue;
-
-      const key = `${selectedCloudId}::${newWord.id}`;
-
-      if (autoAggregationStateRef.current.has(key)) continue;
-
-      autoAggregationStateRef.current.set(key, "processing");
-
-      void autoAggregateEquivalentNewWord(selectedCloudId, newWord.id, targetWord.id)
-        .then((didAggregate) => {
-          if (didAggregate) {
-            autoAggregationStateRef.current.set(key, "completed");
-          } else {
-            autoAggregationStateRef.current.delete(key);
-          }
-        })
-        .catch((error) => {
-          autoAggregationStateRef.current.delete(key);
-          console.error("Não foi possível autoagregar a nova ideia.", error);
-        });
-    }
-  }, [newWords, selectedCloudId, words]);
 
   useEffect(() => {
     setTitleDraft(selectedCloud?.title ?? "");
@@ -367,9 +333,11 @@ export default function SkyPanel() {
   }
 
   async function handleMerge(newWord: FirebaseNewWord, targetWordId: string) {
-    if (!selectedCloudId || !targetWordId) return;
+    const plan = getPendingMergePlan(targetWordId);
 
-    const targetWord = words.find((word) => word.id === targetWordId);
+    if (!selectedCloudId || !plan) return;
+
+    const targetWord = words.find((word) => word.id === plan.targetWordId);
 
     if (!targetWord) return;
 
@@ -378,6 +346,14 @@ export default function SkyPanel() {
     if (didMerge) {
       setFeedback(`"${newWord.text}" foi mesclada com "${targetWord.text}".`);
     }
+  }
+
+  async function handleChooseCanonicalWordForm(word: FirebaseWord, candidate: string) {
+    if (!selectedCloudId || candidate === word.text) return;
+
+    const didChange = await chooseCanonicalWordForm(selectedCloudId, word.id, candidate);
+
+    if (didChange) setFeedback(`Forma canônica alterada para "${candidate}".`);
   }
 
   async function handleUpdateAcceptedWord(word: FirebaseWord, value: string) {
@@ -391,12 +367,34 @@ export default function SkyPanel() {
     setFeedback("Palavra atualizada.");
   }
 
-  async function handleApproveWithSpelling(word: FirebaseNewWord, spelling: string) {
-    if (!selectedCloudId || !isMeaningfullyDifferentSpelling(word.text, spelling)) return;
+  function handleSelectSpelling(word: FirebaseNewWord, spelling: string) {
+    setSelectedSpellings((current) => selectPendingSpelling(current, word.id, word.text, spelling));
+  }
 
-    const didApprove = await approveNewWordAs(selectedCloudId, word.id, spelling);
+  function handleClearSpelling(wordId: string) {
+    setSelectedSpellings((current) => clearPendingSpelling(current, wordId));
+  }
 
-    if (didApprove) setFeedback(`"${spelling.trim()}" foi aceita com a grafia escolhida.`);
+  async function handleApprovePendingWord(word: FirebaseNewWord) {
+    if (!selectedCloudId) return;
+
+    const plan = getPendingApprovalPlan(word.text, selectedSpellings[word.id]);
+    let didApprove = true;
+
+    if (plan.operation === "approveNewWordAs") {
+      didApprove = await approveNewWordAs(selectedCloudId, word.id, plan.text);
+    } else {
+      await approveNewWord(selectedCloudId, word.id, plan.text);
+    }
+
+    if (didApprove) {
+      setSelectedSpellings((current) => clearPendingSpelling(current, word.id));
+      setFeedback(
+        plan.operation === "approveNewWordAs"
+          ? `"${plan.text.trim()}" foi aceita com a grafia escolhida.`
+          : `"${plan.text.trim()}" foi aceita.`,
+      );
+    }
   }
 
   const pendingIdeaStats = useMemo(() => {
@@ -549,6 +547,21 @@ export default function SkyPanel() {
                     <article key={word.id} className="accepted-clean-word">
                       <input defaultValue={word.text} onBlur={(event) => handleUpdateAcceptedWord(word, event.target.value)} />
 
+                      {(word.aliases?.length ?? 0) > 0 && (
+                        <select
+                          aria-label={`Escolher forma canônica de ${word.text}`}
+                          className="canonical-form-select"
+                          onChange={(event) => handleChooseCanonicalWordForm(word, event.target.value)}
+                          value={word.text}
+                        >
+                          {getCanonicalWordCandidates(word.text, word.aliases).map((candidate) => (
+                            <option key={candidate} value={candidate}>
+                              {candidate}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+
                       <span className={`merge-count ${(word.aliases?.length ?? 0) === 0 ? "empty" : ""}`} title={word.aliases?.join(", ")}>
                         (+{word.aliases?.length ?? 0})
                       </span>
@@ -608,6 +621,7 @@ export default function SkyPanel() {
                 ? words.find((acceptedWord) => acceptedWord.id === mergeTargetId) ?? null
                 : null;
               const hasSpellingSuggestion = isMeaningfullyDifferentSpelling(word.text, spellingSuggestion);
+              const selectedSpelling = selectedSpellings[word.id];
 
               return (
               <article key={word.id} className={`new-clean-word ${attention ? "ai-needs-attention" : ""}`}>
@@ -635,8 +649,17 @@ export default function SkyPanel() {
                 {hasSpellingSuggestion && (
                   <div className="ai-suggestion-row">
                     <span>IA sugere ortografia: <strong>{spellingSuggestion}</strong></span>
-                    <button className="button" onClick={() => handleApproveWithSpelling(word, spellingSuggestion ?? "")} type="button">
-                      Usar sugestão
+                    <button className="button" onClick={() => handleSelectSpelling(word, spellingSuggestion ?? "")} type="button">
+                      {selectedSpelling === spellingSuggestion ? "Selecionada" : "Usar sugestão"}
+                    </button>
+                  </div>
+                )}
+
+                {selectedSpelling && (
+                  <div className="selected-spelling-row">
+                    <span>Grafia selecionada: <strong>{selectedSpelling}</strong></span>
+                    <button className="button" onClick={() => handleClearSpelling(word.id)} type="button">
+                      Cancelar
                     </button>
                   </div>
                 )}
@@ -651,8 +674,8 @@ export default function SkyPanel() {
                 )}
 
                 <div className="clean-action-row">
-                  <button className="button" onClick={() => approveNewWord(selectedCloudId, word.id, word.text)} type="button">
-                    Aceitar
+                  <button className="button" onClick={() => handleApprovePendingWord(word)} type="button">
+                    {selectedSpelling ? `Aceitar como "${selectedSpelling}"` : "Aceitar"}
                   </button>
 
                   <button className="button" onClick={() => rejectNewWord(selectedCloudId, word.id)} type="button">
