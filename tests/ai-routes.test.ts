@@ -35,6 +35,26 @@ const triageResult: TriageResult = {
   mergeTargetId: "accepted-1",
 };
 
+type CapturedTriageRequest = {
+  response_format: {
+    json_schema: {
+      strict: boolean;
+      schema: {
+        properties: {
+          results: {
+            items: {
+              properties: {
+                id: { enum: string[] };
+                mergeTargetId: { enum: (string | null)[] };
+              };
+            };
+          };
+        };
+      };
+    };
+  };
+};
+
 function loginRequest(
   body: unknown = { password: "correct" },
   headers: Record<string, string> = {},
@@ -166,10 +186,13 @@ async function runMockedProviderResponse(
   const originalFetch = globalThis.fetch;
   const originalApiKey = process.env.OPENROUTER_API_KEY;
   const diagnostics: OpenRouterTriageFailureDiagnostic[] = [];
+  let requestBody: unknown;
 
   process.env.OPENROUTER_API_KEY = "test-only-openrouter-key";
-  globalThis.fetch = async () =>
-    new Response(
+  globalThis.fetch = async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body));
+
+    return new Response(
       JSON.stringify({
         choices: [{
           finish_reason: "stop",
@@ -178,6 +201,7 @@ async function runMockedProviderResponse(
       }),
       { status: 200, headers: { "content-type": "application/json" } },
     );
+  };
 
   try {
     const handler = createAiTriagePost({
@@ -191,7 +215,7 @@ async function runMockedProviderResponse(
     });
 
     const response = await handler(triageRequest(input));
-    return { diagnostics, response };
+    return { diagnostics, requestBody, response };
   } finally {
     globalThis.fetch = originalFetch;
     if (originalApiKey === undefined) {
@@ -448,6 +472,105 @@ test("provider failure is generic and does not expose upstream details", async (
   assert.equal(response.status, 503);
   assert.equal(body.includes(secret), false);
   assert.equal(calls.provider, 1);
+});
+
+test("provider schema constrains pending and accepted ids", async () => {
+  const input = {
+    question: "Como cuidar melhor do ambiente?",
+    acceptedWords: [
+      { id: "accepted-1", text: "Plantar árvores" },
+      { id: "accepted-2", text: "Economizar água" },
+    ],
+    pendingWords: [
+      { id: "pending-1", text: "Reciclar" },
+      { id: "pending-2", text: "Reutilizar" },
+    ],
+  };
+  const { requestBody, response } = await runMockedProviderResponse(
+    input,
+    JSON.stringify({
+      results: [
+        {
+          id: "pending-1",
+          relevance: 0.8,
+          attention: false,
+          spellingSuggestion: null,
+          mergeTargetId: "accepted-1",
+        },
+        {
+          id: "pending-2",
+          relevance: 0.7,
+          attention: false,
+          spellingSuggestion: null,
+          mergeTargetId: null,
+        },
+      ],
+    }),
+  );
+
+  const request = requestBody as CapturedTriageRequest;
+  const itemSchema = request.response_format.json_schema.schema.properties.results.items;
+
+  assert.equal(response.status, 200);
+  assert.equal(request.response_format.json_schema.strict, true);
+  assert.deepEqual(itemSchema.properties.id.enum, ["pending-1", "pending-2"]);
+  assert.deepEqual(itemSchema.properties.mergeTargetId.enum, [
+    "accepted-1",
+    "accepted-2",
+    null,
+  ]);
+});
+
+test("provider schema permits only null merge targets without accepted words", async () => {
+  const input = {
+    question: "Como cuidar melhor do ambiente?",
+    acceptedWords: [],
+    pendingWords: [{ id: "pending-1", text: "Reciclar" }],
+  };
+  const { requestBody, response } = await runMockedProviderResponse(
+    input,
+    JSON.stringify({
+      results: [{
+        id: "pending-1",
+        relevance: 0.8,
+        attention: false,
+        spellingSuggestion: null,
+        mergeTargetId: null,
+      }],
+    }),
+  );
+
+  const request = requestBody as CapturedTriageRequest;
+  const itemSchema = request.response_format.json_schema.schema.properties.results.items;
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(itemSchema.properties.mergeTargetId.enum, [null]);
+});
+
+test("local validation still rejects an unknown merge target", async () => {
+  const { diagnostics, response } = await runMockedProviderResponse(
+    validTriageBody,
+    JSON.stringify({
+      results: [{ ...triageResult, mergeTargetId: "unknown-merge-target" }],
+    }),
+  );
+
+  assert.equal(response.status, 503);
+  assert.deepEqual(diagnostics, [{
+    code: "provider_result_invalid",
+    validationReason: "merge_target_invalid",
+    finishReason: "stop",
+  }]);
+});
+
+test("valid provider result still passes local validation", async () => {
+  const { response } = await runMockedProviderResponse(
+    validTriageBody,
+    JSON.stringify({ results: [triageResult] }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await responseBody(response), [triageResult]);
 });
 
 test("provider result validation keeps 503 and emits a sanitized diagnostic", async () => {
