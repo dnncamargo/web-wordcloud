@@ -6,7 +6,11 @@ import type { AiAdminSession } from "../lib/ai/admin-session";
 import { createAiAdminSessionHandlers } from "../lib/ai/admin-session-route";
 import type { GuardrailDecision } from "../lib/ai/guardrails";
 import { createAiTriagePost } from "../lib/ai/triage-route";
-import type { TriageResult } from "../lib/ai/openRouterTriage";
+import {
+  OpenRouterTriageError,
+  type OpenRouterTriageFailureDiagnostic,
+  type TriageResult,
+} from "../lib/ai/openRouterTriage";
 import { getTrustedAiLoginIdentity } from "../lib/ai/trusted-client";
 
 const origin = "https://example.test";
@@ -130,6 +134,7 @@ function createTriageHandler(options: {
     guardrail: 0,
     provider: 0,
   };
+  const diagnostics: OpenRouterTriageFailureDiagnostic[] = [];
   const handlers = createAiTriagePost({
     getSession: async () => options.session === undefined ? session : options.session,
     hasProvider: () => {
@@ -145,9 +150,12 @@ function createTriageHandler(options: {
       if (options.triageError) throw options.triageError;
       return [triageResult];
     },
+    logFailure: (diagnostic) => {
+      diagnostics.push(diagnostic);
+    },
   });
 
-  return { calls, handler: handlers };
+  return { calls, diagnostics, handler: handlers };
 }
 
 test("login rejects malformed, wrong-media, and wrong-origin requests before Redis", async () => {
@@ -396,6 +404,52 @@ test("provider failure is generic and does not expose upstream details", async (
   assert.equal(response.status, 503);
   assert.equal(body.includes(secret), false);
   assert.equal(calls.provider, 1);
+});
+
+test("provider result validation keeps 503 and emits a sanitized diagnostic", async () => {
+  const { diagnostics, handler } = createTriageHandler({
+    triageError: new OpenRouterTriageError({
+      code: "provider_result_incomplete",
+      finishReason: "stop",
+      expectedResultCount: 1,
+      actualResultCount: 0,
+    }),
+  });
+  const response = await handler(triageRequest());
+
+  assert.equal(response.status, 503);
+  assert.deepEqual(await responseBody(response), {
+    error: "Serviço de IA indisponível.",
+  });
+  assert.deepEqual(diagnostics, [{
+    code: "provider_result_incomplete",
+    finishReason: "stop",
+    expectedResultCount: 1,
+    actualResultCount: 0,
+  }]);
+});
+
+test("failure diagnostics exclude input, ids, and provider response content", async () => {
+  const inputText = "classroom text that must never be logged";
+  const providerContent = "provider response content that must never be logged";
+  const { diagnostics, handler } = createTriageHandler({
+    triageError: new Error(providerContent),
+  });
+  const response = await handler(
+    triageRequest({
+      ...validTriageBody,
+      question: inputText,
+      acceptedWords: [{ id: "accepted-sensitive-id", text: inputText }],
+      pendingWords: [{ id: "pending-sensitive-id", text: inputText }],
+    }),
+  );
+
+  assert.equal(response.status, 503);
+  const diagnosticOutput = JSON.stringify(diagnostics);
+  assert.doesNotMatch(diagnosticOutput, /classroom text/);
+  assert.doesNotMatch(diagnosticOutput, /accepted-sensitive-id|pending-sensitive-id/);
+  assert.doesNotMatch(diagnosticOutput, /provider response content/);
+  assert.deepEqual(diagnostics, [{ code: "provider_unknown_failure" }]);
 });
 
 test("paid triage route has no Firestore dependency", () => {
