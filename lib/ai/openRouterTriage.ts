@@ -9,6 +9,61 @@ import type {
 
 export type { TriageInput, TriageResult, TriageWord } from "@/lib/ai/triage-contract";
 
+export type OpenRouterTriageFailureCode =
+  | "provider_http_error"
+  | "provider_invalid_json"
+  | "provider_missing_content"
+  | "provider_structured_json_invalid"
+  | "provider_result_incomplete"
+  | "provider_result_invalid"
+  | "provider_unknown_failure";
+
+export type OpenRouterTriageValidationReason =
+  | "result_shape"
+  | "pending_id_invalid"
+  | "pending_id_duplicate"
+  | "relevance_invalid"
+  | "attention_invalid"
+  | "spelling_suggestion_invalid"
+  | "merge_target_invalid";
+
+type OpenRouterTriageFailureMetadata = Readonly<{
+  providerStatus?: number;
+  finishReason?: "stop" | "length" | "content_filter" | "tool_calls" | "function_call";
+  expectedResultCount?: number;
+  actualResultCount?: number;
+}>;
+
+export type OpenRouterTriageFailureDiagnostic =
+  | (OpenRouterTriageFailureMetadata & {
+      code: "provider_result_invalid";
+      validationReason: OpenRouterTriageValidationReason;
+    })
+  | (OpenRouterTriageFailureMetadata & {
+      code: Exclude<OpenRouterTriageFailureCode, "provider_result_invalid">;
+      validationReason?: never;
+    });
+
+export class OpenRouterTriageError extends Error {
+  readonly diagnostic: OpenRouterTriageFailureDiagnostic;
+
+  constructor(diagnostic: OpenRouterTriageFailureDiagnostic) {
+    super(diagnostic.code);
+    this.name = "OpenRouterTriageError";
+    this.diagnostic = diagnostic;
+  }
+}
+
+export function getOpenRouterTriageFailureDiagnostic(
+  error: unknown,
+): OpenRouterTriageFailureDiagnostic {
+  if (!(error instanceof OpenRouterTriageError)) {
+    return { code: "provider_unknown_failure" };
+  }
+
+  return error.diagnostic;
+}
+
 const OPENROUTER_CHAT_COMPLETIONS_URL =
   "https://openrouter.ai/api/v1/chat/completions";
 
@@ -121,6 +176,7 @@ function validateResults(
   value: unknown,
   pendingWords: readonly TriageWord[],
   acceptedWords: readonly TriageWord[],
+  finishReason?: OpenRouterTriageFailureDiagnostic["finishReason"],
 ): TriageResult[] {
   if (
     !isJsonRecord(value) ||
@@ -128,14 +184,22 @@ function validateResults(
     !Array.isArray(value.results) ||
     value.results.length !== pendingWords.length
   ) {
-    throw new Error("OpenRouter returned an incomplete triage result.");
+    throw new OpenRouterTriageError({
+      code: "provider_result_incomplete",
+      finishReason,
+      expectedResultCount: pendingWords.length,
+      actualResultCount:
+        isJsonRecord(value) && Array.isArray(value.results)
+          ? value.results.length
+          : undefined,
+    });
   }
 
   const pendingIds = new Set(pendingWords.map((word) => word.id));
   const acceptedIds = new Set(acceptedWords.map((word) => word.id));
   const seenIds = new Set<string>();
 
-  return value.results.map((result, index) => {
+  return value.results.map((result) => {
     if (
       !isJsonRecord(result) ||
       !hasExactKeys(result, [
@@ -144,23 +208,74 @@ function validateResults(
         "attention",
         "spellingSuggestion",
         "mergeTargetId",
-      ]) ||
-      typeof result.id !== "string" ||
-      !pendingIds.has(result.id) ||
-      seenIds.has(result.id) ||
+      ])
+    ) {
+      throw new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "result_shape",
+        finishReason,
+      });
+    }
+
+    if (typeof result.id !== "string" || !pendingIds.has(result.id)) {
+      throw new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "pending_id_invalid",
+        finishReason,
+      });
+    }
+
+    if (seenIds.has(result.id)) {
+      throw new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "pending_id_duplicate",
+        finishReason,
+      });
+    }
+
+    if (
       typeof result.relevance !== "number" ||
       !Number.isFinite(result.relevance) ||
       result.relevance < 0 ||
-      result.relevance > 1 ||
-      typeof result.attention !== "boolean" ||
-      (result.spellingSuggestion !== null &&
-        (typeof result.spellingSuggestion !== "string" ||
-          result.spellingSuggestion.trim().length === 0)) ||
-      (result.mergeTargetId !== null &&
-        (typeof result.mergeTargetId !== "string" ||
-          !acceptedIds.has(result.mergeTargetId)))
+      result.relevance > 1
     ) {
-      throw new Error(`OpenRouter returned an invalid triage result at index ${index}.`);
+      throw new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "relevance_invalid",
+        finishReason,
+      });
+    }
+
+    if (typeof result.attention !== "boolean") {
+      throw new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "attention_invalid",
+        finishReason,
+      });
+    }
+
+    if (
+      result.spellingSuggestion !== null &&
+      (typeof result.spellingSuggestion !== "string" ||
+        result.spellingSuggestion.trim().length === 0)
+    ) {
+      throw new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "spelling_suggestion_invalid",
+        finishReason,
+      });
+    }
+
+    if (
+      result.mergeTargetId !== null &&
+      (typeof result.mergeTargetId !== "string" ||
+        !acceptedIds.has(result.mergeTargetId))
+    ) {
+      throw new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "merge_target_invalid",
+        finishReason,
+      });
     }
 
     seenIds.add(result.id);
@@ -175,19 +290,49 @@ function validateResults(
   });
 }
 
-function readResponseContent(payload: unknown): string {
+function getFinishReason(
+  choice: JsonRecord | undefined,
+): OpenRouterTriageFailureDiagnostic["finishReason"] {
+  const finishReason = choice?.finish_reason ?? choice?.reason;
+
   if (
-    !isJsonRecord(payload) ||
-    !Array.isArray(payload.choices) ||
-    payload.choices.length === 0 ||
-    !isJsonRecord(payload.choices[0]) ||
-    !isJsonRecord(payload.choices[0].message) ||
-    typeof payload.choices[0].message.content !== "string"
+    finishReason === "stop" ||
+    finishReason === "length" ||
+    finishReason === "content_filter" ||
+    finishReason === "tool_calls" ||
+    finishReason === "function_call"
   ) {
-    throw new Error("OpenRouter returned no structured triage content.");
+    return finishReason;
   }
 
-  return payload.choices[0].message.content;
+  return undefined;
+}
+
+function readResponseContent(payload: unknown): {
+  content: string;
+  finishReason?: OpenRouterTriageFailureDiagnostic["finishReason"];
+} {
+  const choice =
+    isJsonRecord(payload) &&
+    Array.isArray(payload.choices) &&
+    isJsonRecord(payload.choices[0])
+      ? payload.choices[0]
+      : undefined;
+  const finishReason = getFinishReason(choice);
+
+  if (
+    !choice ||
+    !isJsonRecord(choice.message) ||
+    typeof choice.message.content !== "string" ||
+    choice.message.content.length === 0
+  ) {
+    throw new OpenRouterTriageError({
+      code: "provider_missing_content",
+      finishReason,
+    });
+  }
+
+  return { content: choice.message.content, finishReason };
 }
 
 export async function triagePendingWords(input: unknown): Promise<TriageResult[]> {
@@ -200,7 +345,7 @@ export async function triagePendingWords(input: unknown): Promise<TriageResult[]
   const apiKey = getOpenRouterApiKey();
 
   if (!apiKey) {
-    throw new Error("OPENROUTER_API_KEY is not configured.");
+    throw new OpenRouterTriageError({ code: "provider_unknown_failure" });
   }
 
   const model = getOpenRouterModel();
@@ -246,7 +391,10 @@ export async function triagePendingWords(input: unknown): Promise<TriageResult[]
   });
 
   if (!response.ok) {
-    throw new Error(`OpenRouter request failed with status ${response.status}.`);
+    throw new OpenRouterTriageError({
+      code: "provider_http_error",
+      providerStatus: response.status,
+    });
   }
 
   let payload: unknown;
@@ -254,24 +402,25 @@ export async function triagePendingWords(input: unknown): Promise<TriageResult[]
   try {
     payload = await response.json();
   } catch {
-    throw new Error("OpenRouter returned invalid JSON.");
+    throw new OpenRouterTriageError({ code: "provider_invalid_json" });
   }
 
+  const { content, finishReason } = readResponseContent(payload);
   let structuredContent: unknown;
 
   try {
-    structuredContent = JSON.parse(readResponseContent(payload));
-  } catch (error) {
-    if (error instanceof SyntaxError) {
-      throw new Error("OpenRouter returned invalid structured JSON.");
-    }
-
-    throw error;
+    structuredContent = JSON.parse(content);
+  } catch {
+    throw new OpenRouterTriageError({
+      code: "provider_structured_json_invalid",
+      finishReason,
+    });
   }
 
   return validateResults(
     structuredContent,
     validatedInput.pendingWords,
     validatedInput.acceptedWords,
+    finishReason,
   );
 }

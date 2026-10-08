@@ -2,7 +2,11 @@ import "server-only";
 
 import type { AiAdminSession } from "@/lib/ai/admin-session";
 import type { GuardrailDecision } from "@/lib/ai/guardrails";
-import type { TriageResult } from "@/lib/ai/openRouterTriage";
+import {
+  getOpenRouterTriageFailureDiagnostic,
+  type OpenRouterTriageFailureDiagnostic,
+  type TriageResult,
+} from "@/lib/ai/openRouterTriage";
 import {
   hasOversizedContentLength,
   isJsonRequest,
@@ -19,6 +23,7 @@ export type AiTriageRouteDependencies = Readonly<{
   hasProvider: () => boolean;
   authorizePaidTriage: () => Promise<GuardrailDecision>;
   triagePendingWords: (input: unknown) => Promise<TriageResult[]>;
+  logFailure: (diagnostic: OpenRouterTriageFailureDiagnostic) => void;
 }>;
 
 export function createAiTriagePost(
@@ -80,7 +85,8 @@ export function createAiTriagePost(
     try {
       const results = await dependencies.triagePendingWords(inputResult.input);
       return jsonNoStore(results);
-    } catch {
+    } catch (error) {
+      dependencies.logFailure(getOpenRouterTriageFailureDiagnostic(error));
       return jsonNoStore({ error: "Serviço de IA indisponível." }, 503);
     }
   };
