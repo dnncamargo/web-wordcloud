@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   activateCloud,
+  autoAggregateEquivalentNewWord,
   approveNewWord,
   approveNewWordAs,
   archiveCloud,
@@ -24,6 +25,7 @@ import {
   blowWind,
 } from "@/lib/firebase/cloudService";
 import { getCanonicalWordCandidates } from "@/lib/firebase/canonicalWord";
+import { findUniqueExactAcceptedWord } from "@/lib/firebase/autoAggregation";
 import {
   clearPendingSpelling,
   getPendingApprovalPlan,
@@ -81,6 +83,7 @@ export default function SkyPanel() {
   const [selectedSpellings, setSelectedSpellings] = useState<PendingSpellingSelections>({});
   const analysisInFlightRef = useRef(false);
   const analysisRevisionRef = useRef(0);
+  const autoAggregationStateRef = useRef(new Map<string, "processing" | "completed">());
 
   const selectedCloud = clouds.find((cloud) => cloud.id === selectedCloudId) ?? null;
   const visibleClouds = clouds.filter((cloud) => (showArchivedClouds ? cloud.status === "archived" : cloud.status !== "archived"));
@@ -179,6 +182,47 @@ export default function SkyPanel() {
       unsubscribeNewWords();
     };
   }, [invalidateAnalysis, selectedCloudId]);
+
+  useEffect(() => {
+    if (!selectedCloudId) return;
+
+    const pendingWordIds = new Set(newWords.map((word) => word.id));
+
+    for (const key of autoAggregationStateRef.current.keys()) {
+      const [cloudId, newWordId] = key.split("::");
+
+      if (cloudId === selectedCloudId && !pendingWordIds.has(newWordId)) {
+        autoAggregationStateRef.current.delete(key);
+      }
+    }
+
+    if (words.length === 0 || newWords.length === 0) return;
+
+    for (const newWord of newWords) {
+      const targetWord = findUniqueExactAcceptedWord(newWord.text, words);
+
+      if (!targetWord) continue;
+
+      const key = `${selectedCloudId}::${newWord.id}`;
+
+      if (autoAggregationStateRef.current.has(key)) continue;
+
+      autoAggregationStateRef.current.set(key, "processing");
+
+      void autoAggregateEquivalentNewWord(selectedCloudId, newWord.id, targetWord.id)
+        .then((didAggregate) => {
+          if (didAggregate) {
+            autoAggregationStateRef.current.set(key, "completed");
+          } else {
+            autoAggregationStateRef.current.delete(key);
+          }
+        })
+        .catch((error) => {
+          autoAggregationStateRef.current.delete(key);
+          console.error("Não foi possível autoagregar a nova ideia.", error);
+        });
+    }
+  }, [newWords, selectedCloudId, words]);
 
   useEffect(() => {
     setTitleDraft(selectedCloud?.title ?? "");
@@ -545,7 +589,7 @@ export default function SkyPanel() {
                 ) : (
                   words.map((word) => (
                     <article key={word.id} className="accepted-clean-word">
-                      <input defaultValue={word.text} onBlur={(event) => handleUpdateAcceptedWord(word, event.target.value)} />
+                      <input key={`${word.id}:${word.text}`} defaultValue={word.text} onBlur={(event) => handleUpdateAcceptedWord(word, event.target.value)} />
 
                       {(word.aliases?.length ?? 0) > 0 && (
                         <select
