@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { evaluateAcceptedMerges, evaluateSpelling, spellingSuggestionMatches } from "../scripts/evaluate-ai-triage";
-import { evaluationScenarios } from "../scripts/ai-triage-fixtures-v2";
+import {
+  evaluateAcceptedMerges,
+  evaluateSpelling,
+  spellingSuggestionMatches,
+  summarizeAcceptedMerges,
+} from "../scripts/evaluate-ai-triage";
+import { evaluationScenarios } from "../scripts/ai-triage-fixtures-v3";
 
 const mergeScenario = evaluationScenarios.find(
   (scenario) => scenario.id === "accepted-merges",
@@ -53,6 +58,21 @@ test("evaluator reports forbidden and unexpected accepted merge pairs", () => {
 
   assert.ok(metric.failures.some((failure) => failure.includes("forbidden merge")));
   assert.ok(metric.failures.some((failure) => failure.includes("unexpected merge")));
+});
+
+test("merge summary separates correct, omitted, and false-positive pairs", () => {
+  const summary = summarizeAcceptedMerges(mergeScenario, {
+    results: [],
+    acceptedMergeSuggestions: [
+      { firstId: "merge-b", secondId: "merge-a" },
+      { firstId: "merge-a", secondId: "merge-c" },
+    ],
+  });
+
+  assert.deepEqual(summary.correctPairsFound, [["merge-a", "merge-b"]]);
+  assert.deepEqual(summary.expectedPairsOmitted, []);
+  assert.deepEqual(summary.falsePositives, [["merge-a", "merge-c"]]);
+  assert.deepEqual(summary.falseNegatives, []);
 });
 
 test("spelling comparison ignores only capitalization and preserves null checks", () => {

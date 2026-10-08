@@ -13,14 +13,15 @@ import {
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { CALIBRATION_B_INSTRUCTION } from "./ai-calibration-b";
+import { CALIBRATION_C_INSTRUCTION } from "./ai-calibration-c";
 import {
   EVALUATION_FIXTURE_VERSION,
   evaluationScenarios,
-  type EvaluationScenario,
   type MergePair,
-} from "./ai-triage-fixtures-v2";
+  type EvaluationScenario,
+} from "./ai-triage-fixtures-v3";
 
-type CalibrationId = "A" | "B";
+type CalibrationId = "A" | "B" | "C";
 type CalibrationSelection = CalibrationId | "both";
 
 type EvaluationOptions = Readonly<{
@@ -43,6 +44,15 @@ type CalibrationSpec = Readonly<{
   instructionSource: string;
 }>;
 
+export type AcceptedMergeSummary = Readonly<{
+  correctPairsFound: readonly MergePair[];
+  expectedPairsOmitted: readonly MergePair[];
+  incorrectPairsSuggested: readonly MergePair[];
+  falsePositives: readonly MergePair[];
+  falseNegatives: readonly MergePair[];
+  duplicatePairs: readonly MergePair[];
+}>;
+
 const CALIBRATIONS: readonly CalibrationSpec[] = [
   {
     id: "A",
@@ -53,6 +63,11 @@ const CALIBRATIONS: readonly CalibrationSpec[] = [
     id: "B",
     label: "Calibration B (experiment-only)",
     instructionSource: "scripts/ai-calibration-b.ts",
+  },
+  {
+    id: "C",
+    label: "Calibration C (experiment-only)",
+    instructionSource: "scripts/ai-calibration-c.ts",
   },
 ];
 
@@ -176,12 +191,13 @@ export function evaluateSpelling(
   return metric;
 }
 
-export function evaluateAcceptedMerges(
-  scenario: EvaluationScenario,
-  response: TriageResponse,
-): Metric {
-  const metric = createMetric();
-  const expectations = scenario.expectations.acceptedMerges;
+type MergeObservation = Readonly<{
+  counts: ReadonlyMap<string, number>;
+  representativePairs: ReadonlyMap<string, MergePair>;
+  duplicatePairs: readonly MergePair[];
+}>;
+
+function observeAcceptedMerges(response: TriageResponse): MergeObservation {
   const counts = new Map<string, number>();
   const representativePairs = new Map<string, MergePair>();
 
@@ -192,6 +208,52 @@ export function evaluateAcceptedMerges(
     counts.set(key, (counts.get(key) ?? 0) + 1);
     representativePairs.set(key, pair);
   }
+
+  return {
+    counts,
+    representativePairs,
+    duplicatePairs: [...counts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([key]) => representativePairs.get(key) as MergePair),
+  };
+}
+
+export function summarizeAcceptedMerges(
+  scenario: EvaluationScenario,
+  response: TriageResponse,
+): AcceptedMergeSummary {
+  const expectations = scenario.expectations.acceptedMerges;
+  const observation = observeAcceptedMerges(response);
+  const allowedKeys = new Set(expectations.allowedPairs.map(pairKey));
+
+  const correctPairsFound = expectations.allowedPairs.filter((pair) =>
+    observation.counts.has(pairKey(pair)),
+  );
+  const expectedPairsOmitted = expectations.requiredPairs.filter(
+    (pair) => !observation.counts.has(pairKey(pair)),
+  );
+  const incorrectPairsSuggested = [...observation.representativePairs.entries()]
+    .filter(([key]) => !allowedKeys.has(key))
+    .map(([, pair]) => pair);
+
+  return {
+    correctPairsFound,
+    expectedPairsOmitted,
+    incorrectPairsSuggested,
+    falsePositives: incorrectPairsSuggested,
+    falseNegatives: expectedPairsOmitted,
+    duplicatePairs: observation.duplicatePairs,
+  };
+}
+
+export function evaluateAcceptedMerges(
+  scenario: EvaluationScenario,
+  response: TriageResponse,
+): Metric {
+  const metric = createMetric();
+  const expectations = scenario.expectations.acceptedMerges;
+  const observation = observeAcceptedMerges(response);
+  const { counts, representativePairs, duplicatePairs } = observation;
 
   for (const requiredPair of expectations.requiredPairs) {
     addCheck(
@@ -219,13 +281,12 @@ export function evaluateAcceptedMerges(
     );
   }
 
-  const duplicatePairs = [...counts.entries()].filter(([, count]) => count > 1);
   addCheck(
     metric,
     duplicatePairs.length === 0,
     duplicatePairs.length === 0
       ? ""
-      : `duplicate merge pairs: ${duplicatePairs.map(([key]) => key).join(", ")}`,
+      : `duplicate merge pairs: ${duplicatePairs.map((pair) => pairKey(pair)).join(", ")}`,
   );
 
   addCheck(
@@ -352,7 +413,12 @@ function validateFixtures(): void {
 function parseCalibration(value: string): CalibrationSelection {
   const normalized = value.toUpperCase();
 
-  if (normalized === "A" || normalized === "B" || normalized === "BOTH") {
+  if (
+    normalized === "A" ||
+    normalized === "B" ||
+    normalized === "C" ||
+    normalized === "BOTH"
+  ) {
     return normalized === "BOTH" ? "both" : normalized;
   }
 
@@ -395,13 +461,13 @@ function parseOptions(): EvaluationOptions {
     }
 
     throw new Error(
-      "Usage: npm run ai:evaluate -- --dry-run|--allow-network [--calibration A|B|both]",
+      "Usage: npm run ai:evaluate -- --dry-run|--allow-network [--calibration A|B|C|both]",
     );
   }
 
   if (mode === null) {
     throw new Error(
-      "Usage: npm run ai:evaluate -- --dry-run|--allow-network [--calibration A|B|both]",
+      "Usage: npm run ai:evaluate -- --dry-run|--allow-network [--calibration A|B|C|both]",
     );
   }
 
@@ -448,6 +514,35 @@ function printScenarioExpectations(scenario: EvaluationScenario): void {
   console.log(`accepted merges max=${merges.maxSuggestions}`);
 }
 
+function displayPairWithTexts(
+  pair: MergePair,
+  acceptedWordsById: ReadonlyMap<string, string>,
+): string {
+  const firstText = acceptedWordsById.get(pair[0]) ?? "<unknown>";
+  const secondText = acceptedWordsById.get(pair[1]) ?? "<unknown>";
+
+  return `(${pair[0]}=${JSON.stringify(firstText)}) <-> (${pair[1]}=${JSON.stringify(secondText)})`;
+}
+
+function displayPairs(
+  pairs: readonly MergePair[],
+  acceptedWordsById: ReadonlyMap<string, string>,
+): string {
+  return (
+    pairs.map((pair) => displayPairWithTexts(pair, acceptedWordsById)).join(", ") ||
+    "none"
+  );
+}
+
+function attentionFalsePositives(
+  scenario: EvaluationScenario,
+  response: TriageResponse,
+): readonly string[] {
+  return scenario.expectations.attention.expectedFalse.filter(
+    (id) => resultById(response.results, id).attention === true,
+  );
+}
+
 function printIndividualResults(
   scenario: EvaluationScenario,
   response: TriageResponse,
@@ -474,13 +569,45 @@ function printIndividualResults(
   }
 
   for (const suggestion of response.acceptedMergeSuggestions) {
-    const firstText = acceptedWordsById.get(suggestion.firstId) ?? "<unknown>";
-    const secondText = acceptedWordsById.get(suggestion.secondId) ?? "<unknown>";
-
     console.log(
-      `- (${suggestion.firstId}=${JSON.stringify(firstText)}) <-> (${suggestion.secondId}=${JSON.stringify(secondText)})`,
+      `- ${displayPairWithTexts(
+        [suggestion.firstId, suggestion.secondId],
+        acceptedWordsById,
+      )}`,
     );
   }
+}
+
+function printScenarioSummaries(
+  scenario: EvaluationScenario,
+  response: TriageResponse,
+): void {
+  const acceptedWordsById = new Map(
+    scenario.input.acceptedWords.map((word) => [word.id, word.text]),
+  );
+  const mergeSummary = summarizeAcceptedMerges(scenario, response);
+
+  console.log(
+    `accepted merge summary correct_pairs_found=${displayPairs(mergeSummary.correctPairsFound, acceptedWordsById)}`,
+  );
+  console.log(
+    `accepted merge summary expected_pairs_omitted=${displayPairs(mergeSummary.expectedPairsOmitted, acceptedWordsById)}`,
+  );
+  console.log(
+    `accepted merge summary incorrect_pairs_suggested=${displayPairs(mergeSummary.incorrectPairsSuggested, acceptedWordsById)}`,
+  );
+  console.log(
+    `accepted merge summary false_positives=${displayPairs(mergeSummary.falsePositives, acceptedWordsById)}`,
+  );
+  console.log(
+    `accepted merge summary false_negatives=${displayPairs(mergeSummary.falseNegatives, acceptedWordsById)}`,
+  );
+  console.log(
+    `accepted merge summary duplicate_pairs=${displayPairs(mergeSummary.duplicatePairs, acceptedWordsById)}`,
+  );
+  console.log(
+    `attention false positives=${attentionFalsePositives(scenario, response).join(", ") || "none"}`,
+  );
 }
 
 function printDryRun(options: EvaluationOptions): void {
@@ -530,6 +657,8 @@ function printTotals(
   totals: Readonly<Record<CapabilityName, Metric>>,
   openRouterCalls: number,
   providerFailures: number,
+  schemaFailures: number,
+  failureCodes: ReadonlyMap<string, number>,
 ): void {
   console.log(`\nTOTAL ${calibration.id}`);
 
@@ -538,6 +667,12 @@ function printTotals(
   }
 
   console.log(`provider_failures=${providerFailures}`);
+  console.log(`schema_failures=${schemaFailures}`);
+  console.log(
+    `provider_failure_codes=${
+      [...failureCodes.entries()].map(([code, count]) => `${code}:${count}`).join(", ") || "none"
+    }`,
+  );
   console.log(`openrouter_calls=${openRouterCalls}`);
 }
 
@@ -550,6 +685,8 @@ async function runCalibration(calibration: CalibrationSpec): Promise<boolean> {
   };
   let openRouterCalls = 0;
   let providerFailures = 0;
+  let schemaFailures = 0;
+  const failureCodes = new Map<string, number>();
 
   console.log(`\nCALIBRATION ${calibration.id} — ${calibration.label}`);
 
@@ -562,12 +699,15 @@ async function runCalibration(calibration: CalibrationSpec): Promise<boolean> {
           ? await triagePendingWords(scenario.input)
           : await triagePendingWordsForEvaluator(
               scenario.input,
-              CALIBRATION_B_INSTRUCTION,
+              calibration.id === "B"
+                ? CALIBRATION_B_INSTRUCTION
+                : CALIBRATION_C_INSTRUCTION,
             );
       const metrics = evaluateScenario(scenario, response);
 
       printScenarioExpectations(scenario);
       printIndividualResults(scenario, response);
+      printScenarioSummaries(scenario, response);
 
       for (const capability of CAPABILITIES) {
         mergeMetrics(totals[capability], metrics[capability]);
@@ -576,6 +716,17 @@ async function runCalibration(calibration: CalibrationSpec): Promise<boolean> {
     } catch (error: unknown) {
       providerFailures += 1;
       const diagnostic = getOpenRouterTriageFailureDiagnostic(error);
+      failureCodes.set(
+        diagnostic.code,
+        (failureCodes.get(diagnostic.code) ?? 0) + 1,
+      );
+      if (
+        diagnostic.code === "provider_result_invalid" ||
+        diagnostic.code === "provider_result_incomplete" ||
+        diagnostic.code === "provider_structured_json_invalid"
+      ) {
+        schemaFailures += 1;
+      }
       console.log(
         `\nSCENARIO ${scenario.id} — provider failure code=${diagnostic.code}`,
       );
@@ -585,7 +736,14 @@ async function runCalibration(calibration: CalibrationSpec): Promise<boolean> {
     }
   }
 
-  printTotals(calibration, totals, openRouterCalls, providerFailures);
+  printTotals(
+    calibration,
+    totals,
+    openRouterCalls,
+    providerFailures,
+    schemaFailures,
+    failureCodes,
+  );
 
   return (
     providerFailures === 0 &&
