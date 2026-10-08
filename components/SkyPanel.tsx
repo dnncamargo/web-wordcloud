@@ -47,6 +47,7 @@ import {
   isTriageRequestEligible,
   isTriageSnapshotCurrent,
   orderTriageWords,
+  shouldShowPendingManualMerge,
   readTriageResponse,
   type TriageDisplayItem,
   type TriageSnapshot,
@@ -131,6 +132,7 @@ export default function SkyPanel() {
       attention: false,
       spellingSuggestion: null,
     }));
+  const hasCurrentAnalysis = currentAnalysisItems !== null;
 
   useEffect(() => {
     latestTriageSnapshotRef.current = currentTriageSnapshot;
@@ -644,52 +646,9 @@ export default function SkyPanel() {
 
             <section className="clean-section">
               <div className="clean-section-title">
-                <h2>Palavras aceitas</h2>
+                <h2>Ideias aceitas</h2>
                 <span>{words.length}</span>
               </div>
-
-              {visibleAcceptedMergeSuggestions.length > 0 && (
-                <div className="accepted-merge-suggestions">
-                  {visibleAcceptedMergeSuggestions.map(({ firstWord, secondWord, pairKey }) => {
-                    const candidates = getAcceptedMergeCanonicalCandidates(firstWord, secondWord);
-                    const selectedCanonical = acceptedMergeCanonicalSelections[pairKey] ?? "";
-
-                    return (
-                      <article key={pairKey} className="ai-suggestion-row accepted-merge-suggestion">
-                        <span>
-                          IA sugere mesclar: <strong>{firstWord.text}</strong> ↔ <strong>{secondWord.text}</strong>
-                        </span>
-
-                        <select
-                          aria-label={`Escolher forma canônica para mesclar ${firstWord.text} e ${secondWord.text}`}
-                          value={selectedCanonical}
-                          onChange={(event) => {
-                            const candidate = event.target.value;
-                            setAcceptedMergeCanonicalSelections((current) => ({
-                              ...current,
-                              [pairKey]: candidate,
-                            }));
-                          }}
-                        >
-                          <option value="" disabled>Escolher forma canônica...</option>
-                          {candidates.map((candidate) => (
-                            <option key={candidate} value={candidate}>{candidate}</option>
-                          ))}
-                        </select>
-
-                        <button
-                          className="button"
-                          disabled={!selectedCanonical}
-                          onClick={() => handleMergeAcceptedWords(firstWord, secondWord, pairKey)}
-                          type="button"
-                        >
-                          Mesclar
-                        </button>
-                      </article>
-                    );
-                  })}
-                </div>
-              )}
 
               <div className="column-scroll-body accepted-clean-list">
                 {words.length === 0 ? (
@@ -697,26 +656,72 @@ export default function SkyPanel() {
                 ) : (
                   words.map((word) => (
                     <article key={word.id} className="accepted-clean-word">
-                      <input key={`${word.id}:${word.text}`} defaultValue={word.text} onBlur={(event) => handleUpdateAcceptedWord(word, event.target.value)} />
+                      <div className="accepted-word-content">
+                        <div className="accepted-word-fields">
+                          <input key={`${word.id}:${word.text}`} defaultValue={word.text} onBlur={(event) => handleUpdateAcceptedWord(word, event.target.value)} />
 
-                      {(word.aliases?.length ?? 0) > 0 && (
-                        <select
-                          aria-label={`Escolher forma canônica de ${word.text}`}
-                          className="canonical-form-select"
-                          onChange={(event) => handleChooseCanonicalWordForm(word, event.target.value)}
-                          value={word.text}
-                        >
-                          {getCanonicalWordCandidates(word.text, word.aliases).map((candidate) => (
-                            <option key={candidate} value={candidate}>
-                              {candidate}
-                            </option>
-                          ))}
-                        </select>
-                      )}
+                          {(word.aliases?.length ?? 0) > 0 && (
+                            <select
+                              aria-label={`Escolher forma canônica de ${word.text}`}
+                              className="canonical-form-select"
+                              onChange={(event) => handleChooseCanonicalWordForm(word, event.target.value)}
+                              value={word.text}
+                            >
+                              {getCanonicalWordCandidates(word.text, word.aliases).map((candidate) => (
+                                <option key={candidate} value={candidate}>
+                                  {candidate}
+                                </option>
+                              ))}
+                            </select>
+                          )}
 
-                      <span className={`merge-count ${(word.aliases?.length ?? 0) === 0 ? "empty" : ""}`} title={word.aliases?.join(", ")}>
-                        (+{word.aliases?.length ?? 0})
-                      </span>
+                          <span className={`merge-count ${(word.aliases?.length ?? 0) === 0 ? "empty" : ""}`} title={word.aliases?.join(", ")}>
+                            (+{word.aliases?.length ?? 0})
+                          </span>
+                        </div>
+
+                        {visibleAcceptedMergeSuggestions
+                          .filter(({ firstWord }) => firstWord.id === word.id)
+                          .map(({ firstWord, secondWord, pairKey }) => {
+                            const candidates = getAcceptedMergeCanonicalCandidates(firstWord, secondWord);
+                            const selectedCanonical = acceptedMergeCanonicalSelections[pairKey] ?? "";
+
+                            return (
+                              <article key={pairKey} className="ai-suggestion-row accepted-merge-suggestion">
+                                <span>
+                                  IA sugere mesclar: <strong>{firstWord.text}</strong> ↔ <strong>{secondWord.text}</strong>
+                                </span>
+
+                                <select
+                                  aria-label={`Escolher forma canônica para mesclar ${firstWord.text} e ${secondWord.text}`}
+                                  value={selectedCanonical}
+                                  onChange={(event) => {
+                                    const candidate = event.target.value;
+                                    setAcceptedMergeCanonicalSelections((current) => ({
+                                      ...current,
+                                      [pairKey]: candidate,
+                                    }));
+                                  }}
+                                >
+                                  <option value="" disabled>Escolher forma canônica...</option>
+                                  {candidates.map((candidate) => (
+                                    <option key={candidate} value={candidate}>{candidate}</option>
+                                  ))}
+                                </select>
+
+                                <button
+                                  className="button"
+                                  disabled={!selectedCanonical}
+                                  onClick={() => handleMergeAcceptedWords(firstWord, secondWord, pairKey)}
+                                  type="button"
+                                >
+                                  Mesclar
+                                </button>
+                              </article>
+                            );
+                          })}
+                      </div>
+
                       <span className="word-count">{word.count}</span>
 
                       <button className="button icon-button remove-word-button" aria-label={`Remover ${word.text}`} title="Remover" onClick={() => deleteWord(selectedCloud.id, word.id)}>
@@ -823,17 +828,19 @@ export default function SkyPanel() {
                   </button>
                 </div>
 
-                <select defaultValue="" onChange={(event) => handleMerge(word, event.target.value)} disabled={words.length === 0}>
-                  <option value="" disabled>
-                    Mesclar com...
-                  </option>
-
-                  {words.map((acceptedWord) => (
-                    <option key={acceptedWord.id} value={acceptedWord.id}>
-                      {acceptedWord.text}
+                {shouldShowPendingManualMerge(hasCurrentAnalysis, attention) && (
+                  <select defaultValue="" onChange={(event) => handleMerge(word, event.target.value)} disabled={words.length === 0}>
+                    <option value="" disabled>
+                      Mesclar com...
                     </option>
-                  ))}
-                </select>
+
+                    {words.map((acceptedWord) => (
+                      <option key={acceptedWord.id} value={acceptedWord.id}>
+                        {acceptedWord.text}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </article>
               );
             })

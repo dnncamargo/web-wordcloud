@@ -9,6 +9,7 @@ import {
   isTriageSnapshotCurrent,
   orderTriageWords,
   readTriageResponse,
+  shouldShowPendingManualMerge,
 } from "../lib/ai/triage-client";
 import {
   validateTriageResults,
@@ -102,6 +103,13 @@ test("relevance orders pending ideas stably while display data hides the score",
   assert.equal(displayItems[0].attention, true);
   assert.deepEqual(Object.keys(displayItems[0]).sort(), ["attention", "spellingSuggestion", "word"]);
   assert.doesNotMatch(JSON.stringify(displayItems), /relevance/);
+});
+
+test("manual pending merge stays available except for attention items in current analysis", () => {
+  assert.equal(shouldShowPendingManualMerge(false, false), true);
+  assert.equal(shouldShowPendingManualMerge(false, true), true);
+  assert.equal(shouldShowPendingManualMerge(true, false), true);
+  assert.equal(shouldShowPendingManualMerge(true, true), false);
 });
 
 test("analysis snapshot invalidates on context changes and remains current otherwise", () => {

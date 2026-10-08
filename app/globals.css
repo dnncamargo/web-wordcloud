@@ -1085,13 +1085,34 @@ input {
 
 .accepted-clean-word {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 11rem) 42px 56px 32px;
+  grid-template-columns: minmax(0, 1fr) 56px 32px;
+  align-items: start;
+  gap: 8px;
+}
+
+.accepted-word-content {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.accepted-word-fields {
+  min-width: 0;
+  display: flex;
   align-items: center;
-  gap: 1px;
+  gap: 8px;
 }
 
 .accepted-clean-word input {
   min-width: 0;
+}
+
+.accepted-word-fields input {
+  flex: 1 1 auto;
+}
+
+.accepted-word-fields .canonical-form-select {
+  flex: 0 1 11rem;
 }
 
 .accepted-clean-word .word-count,
@@ -1115,6 +1136,26 @@ input {
 
 .accepted-clean-word .merge-count.empty {
   visibility: hidden;
+}
+
+.accepted-clean-word .word-count,
+.accepted-clean-word .remove-word-button {
+  align-self: start;
+}
+
+.accepted-merge-suggestion > span {
+  color: var(--muted);
+  font-weight: inherit;
+}
+
+@media (max-width: 980px) {
+  .accepted-clean-word {
+    grid-template-columns: minmax(0, 1fr) 48px 28px;
+  }
+
+  .accepted-clean-word .remove-word-button {
+    grid-column: auto;
+  }
 }
 
 .canonical-form-select {
