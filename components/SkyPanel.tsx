@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   activateCloud,
   autoAggregateEquivalentNewWord,
   approveNewWord,
+  approveNewWordAs,
   archiveCloud,
   createCloud,
   deleteWord,
@@ -23,8 +24,22 @@ import {
   blowWind,
 } from "@/lib/firebase/cloudService";
 import { normalizeWord } from "@/lib/normalizeWord";
+import { findUniqueExactAcceptedWord } from "@/lib/firebase/autoAggregation";
 import AiAdminControl from "@/components/AiAdminControl";
-import { Archive, ArchiveRestore, Plus, Wind, X } from "lucide-react";
+import type { AiSessionState } from "@/lib/ai/admin-session-contract";
+import {
+  createTriageSnapshot,
+  isMeaningfullyDifferentSpelling,
+  isTriageQuestionDraftCurrent,
+  isTriageRequestEligible,
+  isTriageSnapshotCurrent,
+  orderTriageWords,
+  readTriageResponse,
+  type TriageDisplayItem,
+  type TriageSnapshot,
+} from "@/lib/ai/triage-client";
+import type { TriageInput } from "@/lib/ai/triage-contract";
+import { Archive, ArchiveRestore, Plus, Sparkles, Wind, X } from "lucide-react";
 
 function getStatusLabel(status: FirebaseCloud["status"]) {
   if (status === "open") return "aberta";
@@ -49,14 +64,69 @@ export default function SkyPanel() {
   const [questionDraft, setQuestionDraft] = useState("");
   const [feedback, setFeedback] = useState("");
   const [showArchivedClouds, setShowArchivedClouds] = useState(false);
+  const [aiSession, setAiSession] = useState<AiSessionState | null>(null);
+  const [aiSessionInvalidationToken, setAiSessionInvalidationToken] = useState(0);
+  const [analysisSnapshot, setAnalysisSnapshot] = useState<TriageSnapshot | null>(null);
+  const [analysisItems, setAnalysisItems] = useState<TriageDisplayItem<FirebaseNewWord>[] | null>(null);
+  const [analysisState, setAnalysisState] = useState<"idle" | "loading">("idle");
+  const [analysisError, setAnalysisError] = useState("");
+  const [analysisRevision, setAnalysisRevision] = useState(0);
+  const [analysisResultRevision, setAnalysisResultRevision] = useState<number | null>(null);
+  const analysisInFlightRef = useRef(false);
+  const analysisRevisionRef = useRef(0);
   const autoAggregationStateRef = useRef(new Map<string, "processing" | "completed">());
 
   const selectedCloud = clouds.find((cloud) => cloud.id === selectedCloudId) ?? null;
   const visibleClouds = clouds.filter((cloud) => (showArchivedClouds ? cloud.status === "archived" : cloud.status !== "archived"));
+  const currentTriageSnapshot = useMemo(
+    () =>
+      createTriageSnapshot(
+        selectedCloudId,
+        selectedCloud?.publicTitle ?? "",
+        words,
+        newWords,
+      ),
+    [newWords, selectedCloud?.publicTitle, selectedCloudId, words],
+  );
+  const latestTriageSnapshotRef = useRef(currentTriageSnapshot);
+
+  const currentAnalysisItems =
+    analysisResultRevision === analysisRevision &&
+    isTriageQuestionDraftCurrent(selectedCloud?.publicTitle ?? "", questionDraft) &&
+    analysisSnapshot &&
+    analysisItems &&
+    isTriageSnapshotCurrent(analysisSnapshot, currentTriageSnapshot)
+      ? analysisItems
+      : null;
+  const displayPendingItems =
+    currentAnalysisItems ??
+    newWords.map((word) => ({
+      word,
+      attention: false,
+      spellingSuggestion: null,
+      mergeTargetId: null,
+    }));
 
   useEffect(() => {
-    const unsubscribeClouds = listenClouds(setClouds);
+    latestTriageSnapshotRef.current = currentTriageSnapshot;
+  }, [currentTriageSnapshot]);
+
+  const invalidateAnalysis = useCallback(() => {
+    analysisRevisionRef.current += 1;
+    setAnalysisRevision((current) => current + 1);
+    setAnalysisResultRevision(null);
+    setAnalysisSnapshot(null);
+    setAnalysisItems(null);
+    setAnalysisError("");
+  }, []);
+
+  useEffect(() => {
+    const unsubscribeClouds = listenClouds((nextClouds) => {
+      invalidateAnalysis();
+      setClouds(nextClouds);
+    });
     const unsubscribeSettings = listenGlobalSettings((cloudId) => {
+      invalidateAnalysis();
       setActiveCloudId(cloudId);
 
       setSelectedCloudId((currentSelectedId) => {
@@ -69,7 +139,7 @@ export default function SkyPanel() {
       unsubscribeClouds();
       unsubscribeSettings();
     };
-  }, []);
+  }, [invalidateAnalysis]);
 
   useEffect(() => {
     if (selectedCloudId) return;
@@ -88,19 +158,20 @@ export default function SkyPanel() {
       return;
     }
 
-    const unsubscribeWords = listenWords(selectedCloudId, setWords);
-    const unsubscribeNewWords = listenNewWords(selectedCloudId, setNewWords);
+    const unsubscribeWords = listenWords(selectedCloudId, (nextWords) => {
+      invalidateAnalysis();
+      setWords(nextWords);
+    });
+    const unsubscribeNewWords = listenNewWords(selectedCloudId, (nextNewWords) => {
+      invalidateAnalysis();
+      setNewWords(nextNewWords);
+    });
 
     return () => {
       unsubscribeWords();
       unsubscribeNewWords();
     };
-  }, [selectedCloudId]);
-
-  useEffect(() => {
-    setTitleDraft(selectedCloud?.title ?? "");
-    setQuestionDraft(selectedCloud?.publicTitle ?? "");
-  }, [selectedCloud?.id, selectedCloud?.title, selectedCloud?.publicTitle]);
+  }, [invalidateAnalysis, selectedCloudId]);
 
   useEffect(() => {
     if (!selectedCloudId) return;
@@ -117,23 +188,10 @@ export default function SkyPanel() {
 
     if (words.length === 0 || newWords.length === 0) return;
 
-    const acceptedWordsByNormalized = new Map<string, FirebaseWord[]>();
-
-    for (const word of words) {
-      const normalized = normalizeWord(word.text);
-
-      if (!normalized) continue;
-
-      const candidates = acceptedWordsByNormalized.get(normalized) ?? [];
-      candidates.push(word);
-      acceptedWordsByNormalized.set(normalized, candidates);
-    }
-
     for (const newWord of newWords) {
-      const normalized = normalizeWord(newWord.text);
-      const candidates = acceptedWordsByNormalized.get(normalized) ?? [];
+      const targetWord = findUniqueExactAcceptedWord(newWord.text, words);
 
-      if (!normalized || candidates.length !== 1) continue;
+      if (!targetWord) continue;
 
       const key = `${selectedCloudId}::${newWord.id}`;
 
@@ -141,7 +199,7 @@ export default function SkyPanel() {
 
       autoAggregationStateRef.current.set(key, "processing");
 
-      void autoAggregateEquivalentNewWord(selectedCloudId, newWord.id, candidates[0].id)
+      void autoAggregateEquivalentNewWord(selectedCloudId, newWord.id, targetWord.id)
         .then((didAggregate) => {
           if (didAggregate) {
             autoAggregationStateRef.current.set(key, "completed");
@@ -156,9 +214,15 @@ export default function SkyPanel() {
     }
   }, [newWords, selectedCloudId, words]);
 
+  useEffect(() => {
+    setTitleDraft(selectedCloud?.title ?? "");
+    setQuestionDraft(selectedCloud?.publicTitle ?? "");
+  }, [selectedCloud?.id, selectedCloud?.title, selectedCloud?.publicTitle]);
+
   async function handleCreateCloud() {
     const id = await createCloud();
 
+    invalidateAnalysis();
     setSelectedCloudId(id);
     setFeedback("Rascunho criado. Edite e ative quando estiver pronto.");
   }
@@ -166,6 +230,7 @@ export default function SkyPanel() {
   async function handleActivateCloud(cloudId: string) {
     await activateCloud(cloudId);
 
+    invalidateAnalysis();
     setSelectedCloudId(cloudId);
     setFeedback("Nuvem em precipitação.");
   }
@@ -173,6 +238,7 @@ export default function SkyPanel() {
   async function handleArchiveCloud(cloudId: string) {
     await archiveCloud(cloudId);
 
+    invalidateAnalysis();
     setSelectedCloudId(cloudId);
     setFeedback("Nuvem arquivada.");
   }
@@ -180,6 +246,7 @@ export default function SkyPanel() {
   async function handleUnarchiveCloud(cloudId: string) {
     await unarchiveCloud(cloudId);
 
+    invalidateAnalysis();
     setSelectedCloudId(cloudId);
     setFeedback("Nuvem desarquivada.");
   }
@@ -197,6 +264,106 @@ export default function SkyPanel() {
 
     await updateCloudText(selectedCloudId, field, cleanValue);
     setFeedback("Nuvem atualizada.");
+  }
+
+  async function handleAiAnalysis() {
+    if (analysisInFlightRef.current) return;
+
+    if (selectedCloud && questionDraft !== selectedCloud.publicTitle) {
+      setAnalysisError("Finalize e salve a pergunta antes de analisar.");
+      return;
+    }
+
+    const input: TriageInput | null = selectedCloud
+      ? {
+          question: selectedCloud.publicTitle,
+          acceptedWords: words.map(({ id, text }) => ({ id, text })),
+          pendingWords: newWords.map(({ id, text }) => ({ id, text })),
+        }
+      : null;
+
+    if (!input || !isTriageRequestEligible({
+      authenticated: aiSession?.authenticated === true,
+      cloudId: selectedCloudId,
+      input,
+    })) {
+      if (!aiSession?.authenticated) {
+        setAnalysisError("Ative a IA pelo controle no cabeçalho para solicitar uma análise.");
+      } else if (!selectedCloudId) {
+        setAnalysisError("Selecione uma nuvem antes de analisar.");
+      } else if (newWords.length === 0) {
+        setAnalysisError("Não há ideias pendentes para analisar.");
+      } else {
+        setAnalysisError("O conjunto atual não pode ser analisado como uma única solicitação.");
+      }
+      return;
+    }
+
+    const requestedSnapshot = createTriageSnapshot(
+      selectedCloudId,
+      input.question,
+      words,
+      newWords,
+    );
+    const requestedRevision = analysisRevisionRef.current;
+
+    analysisInFlightRef.current = true;
+    setAnalysisState("loading");
+    setAnalysisError("");
+
+    try {
+      const response = await fetch("/api/ai/triage", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify(input),
+      });
+
+      if (response.status === 401) {
+        setAiSession(null);
+        setAiSessionInvalidationToken((current) => current + 1);
+        invalidateAnalysis();
+        setAnalysisError("A sessão da IA expirou. Reative-a pelo controle no cabeçalho.");
+        return;
+      }
+
+      if (response.status === 429) {
+        setAnalysisError("O limite de uso da IA foi atingido.");
+        return;
+      }
+
+      if (response.status === 503) {
+        setAnalysisError("A IA está temporariamente indisponível.");
+        return;
+      }
+
+      if (response.status === 400 || response.status === 413) {
+        setAnalysisError("O conjunto atual não pode ser analisado como uma única solicitação.");
+        return;
+      }
+
+      if (!response.ok) {
+        setAnalysisError("Não foi possível concluir a análise.");
+        return;
+      }
+
+      const results = await readTriageResponse(response, input);
+      const currentSnapshotAfterRequest = latestTriageSnapshotRef.current;
+
+      if (
+        requestedRevision !== analysisRevisionRef.current ||
+        !isTriageSnapshotCurrent(requestedSnapshot, currentSnapshotAfterRequest)
+      ) return;
+
+      setAnalysisSnapshot(requestedSnapshot);
+      setAnalysisItems(orderTriageWords(newWords, results));
+      setAnalysisResultRevision(requestedRevision);
+    } catch {
+      setAnalysisError("Não foi possível concluir a análise.");
+    } finally {
+      analysisInFlightRef.current = false;
+      setAnalysisState("idle");
+    }
   }
 
   async function handleMerge(newWord: FirebaseNewWord, targetWordId: string) {
@@ -222,6 +389,14 @@ export default function SkyPanel() {
 
     await updateWordText(selectedCloudId, word, cleanValue);
     setFeedback("Palavra atualizada.");
+  }
+
+  async function handleApproveWithSpelling(word: FirebaseNewWord, spelling: string) {
+    if (!selectedCloudId || !isMeaningfullyDifferentSpelling(word.text, spelling)) return;
+
+    const didApprove = await approveNewWordAs(selectedCloudId, word.id, spelling);
+
+    if (didApprove) setFeedback(`"${spelling.trim()}" foi aceita com a grafia escolhida.`);
   }
 
   const pendingIdeaStats = useMemo(() => {
@@ -250,12 +425,16 @@ export default function SkyPanel() {
           <h1>Gerenciamento do Céu</h1>
 
           <div className="sky-clean-header-actions">
-            <AiAdminControl />
+            <AiAdminControl
+              onSessionChange={setAiSession}
+              sessionInvalidationToken={aiSessionInvalidationToken}
+            />
 
             <button
               className={`button icon-button ${showArchivedClouds ? "active" : ""}`}
               onClick={() => {
                 setShowArchivedClouds((currentValue) => !currentValue);
+                invalidateAnalysis();
                 setSelectedCloudId(null);
               }}
               title={showArchivedClouds ? "Ver nuvens ativas e fechadas" : "Ver arquivo"}
@@ -281,7 +460,10 @@ export default function SkyPanel() {
 
               return (
                 <article key={cloud.id} className={["clean-cloud-item", isSelected ? "selected" : "", isActive ? "active" : "", isArchived ? "archived" : ""].join(" ")}>
-                  <button className="cloud-name-button" onClick={() => setSelectedCloudId(cloud.id)}>
+                  <button className="cloud-name-button" onClick={() => {
+                    invalidateAnalysis();
+                    setSelectedCloudId(cloud.id);
+                  }}>
                     <strong>{cloud.title || "Sem título"}</strong>
 
                     <small>{isActive ? "em precipitação" : getStatusLabel(cloud.status)}</small>
@@ -343,7 +525,10 @@ export default function SkyPanel() {
               <textarea
                 className="clean-question-input"
                 value={questionDraft}
-                onChange={(event) => setQuestionDraft(event.target.value)}
+                onChange={(event) => {
+                  invalidateAnalysis();
+                  setQuestionDraft(event.target.value);
+                }}
                 onBlur={() => saveCloudField("publicTitle", questionDraft)}
                 placeholder="Pergunta investigadora"
                 rows={2}
@@ -393,9 +578,24 @@ export default function SkyPanel() {
       {/* Recepção de Palavras */}
       <section className="sky-clean-column sky-new-column">
         <div className="clean-section-title">
-          <h2>Novas ideias</h2>
-          <span>{newWords.length}</span>
+          <div className="new-ideas-title">
+            <h2>Novas ideias</h2>
+            <span>{newWords.length}</span>
+          </div>
+
+          <button
+            className="button ai-triage-action"
+            onClick={handleAiAnalysis}
+            disabled={analysisState === "loading" || !selectedCloudId || newWords.length === 0}
+            type="button"
+            title="Analisar ideias com IA"
+          >
+            <Sparkles size={14} strokeWidth={2.2} />
+            {analysisState === "loading" ? "Analisando..." : "Analisar"}
+          </button>
         </div>
+
+        {analysisError && <p className="ai-triage-error" role="alert">{analysisError}</p>}
 
         <div className="column-scroll-body new-clean-list">
           {!selectedCloudId ? (
@@ -403,9 +603,17 @@ export default function SkyPanel() {
           ) : newWords.length === 0 ? (
             <p className="clean-empty">Nenhuma ideia pendente.</p>
           ) : (
-            newWords.map((word) => (
-              <article key={word.id} className="new-clean-word">
+            displayPendingItems.map(({ word, attention, spellingSuggestion, mergeTargetId }) => {
+              const mergeTarget = mergeTargetId
+                ? words.find((acceptedWord) => acceptedWord.id === mergeTargetId) ?? null
+                : null;
+              const hasSpellingSuggestion = isMeaningfullyDifferentSpelling(word.text, spellingSuggestion);
+
+              return (
+              <article key={word.id} className={`new-clean-word ${attention ? "ai-needs-attention" : ""}`}>
                 <strong>{word.text}</strong>
+
+                {attention && <span className="ai-attention-note">Revisar com atenção</span>}
 
                 {(() => {
                   const ideaKey = word.normalized || word.text.trim().toLowerCase();
@@ -424,12 +632,30 @@ export default function SkyPanel() {
                   );
                 })()}
 
+                {hasSpellingSuggestion && (
+                  <div className="ai-suggestion-row">
+                    <span>IA sugere ortografia: <strong>{spellingSuggestion}</strong></span>
+                    <button className="button" onClick={() => handleApproveWithSpelling(word, spellingSuggestion ?? "")} type="button">
+                      Usar sugestão
+                    </button>
+                  </div>
+                )}
+
+                {mergeTarget && (
+                  <div className="ai-suggestion-row">
+                    <span>IA sugere mesclar com: <strong>{mergeTarget.text}</strong></span>
+                    <button className="button" onClick={() => handleMerge(word, mergeTarget.id)} type="button">
+                      Mesclar sugestão
+                    </button>
+                  </div>
+                )}
+
                 <div className="clean-action-row">
-                  <button className="button" onClick={() => approveNewWord(selectedCloudId, word.id, word.text)}>
+                  <button className="button" onClick={() => approveNewWord(selectedCloudId, word.id, word.text)} type="button">
                     Aceitar
                   </button>
 
-                  <button className="button" onClick={() => rejectNewWord(selectedCloudId, word.id)}>
+                  <button className="button" onClick={() => rejectNewWord(selectedCloudId, word.id)} type="button">
                     Recusar
                   </button>
                 </div>
@@ -446,7 +672,8 @@ export default function SkyPanel() {
                   ))}
                 </select>
               </article>
-            ))
+              );
+            })
           )}
         </div>
 

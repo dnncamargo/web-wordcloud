@@ -1,5 +1,9 @@
 import { db } from "@/lib/firebase/client";
 import { normalizeWord } from "@/lib/normalizeWord";
+import {
+  prepareApprovedWordReplacement,
+  prepareOriginalApprovedWord,
+} from "@/lib/firebase/wordApproval";
 import { addDoc, collection, deleteDoc, doc, getDoc, increment, onSnapshot, runTransaction, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
 
 export type FirebaseCloud = {
@@ -231,12 +235,16 @@ export async function approveNewWord(cloudId: string, newWordId: string, text: s
 
     if (status !== "pending") return;
 
-    const sourceText = String(newWordData.text ?? text);
-    const normalized = normalizeWord(sourceText);
+    const originalApproval = prepareOriginalApprovedWord(
+      newWordData.text === undefined || newWordData.text === null
+        ? null
+        : String(newWordData.text),
+      text,
+    );
 
-    if (!normalized) return;
+    if (!originalApproval) return;
 
-    const wordRef = doc(db, "clouds", cloudId, "words", normalized);
+    const wordRef = doc(db, "clouds", cloudId, "words", originalApproval.normalized);
     const wordSnapshot = await transaction.get(wordRef);
 
     if (wordSnapshot.exists()) {
@@ -246,8 +254,8 @@ export async function approveNewWord(cloudId: string, newWordId: string, text: s
       });
     } else {
       transaction.set(wordRef, {
-        text: sourceText.trim(),
-        normalized,
+        text: originalApproval.text,
+        normalized: originalApproval.normalized,
         count: 1,
         aliases: [],
         createdAt: serverTimestamp(),
@@ -289,6 +297,67 @@ export async function autoAggregateEquivalentNewWord(cloudId: string, newWordId:
       count: increment(1),
       updatedAt: serverTimestamp(),
     });
+
+    transaction.update(newWordRef, {
+      status: "approved",
+      reviewedAt: serverTimestamp(),
+    });
+
+    return true;
+  });
+}
+
+export async function approveNewWordAs(
+  cloudId: string,
+  newWordId: string,
+  replacementText: string,
+) {
+  const newWordRef = doc(db, "clouds", cloudId, "newWords", newWordId);
+
+  return runTransaction(db, async (transaction) => {
+    const newWordSnapshot = await transaction.get(newWordRef);
+
+    if (!newWordSnapshot.exists()) return false;
+
+    const newWordData = newWordSnapshot.data();
+    const status = String(newWordData.status ?? "pending");
+
+    if (status !== "pending") return false;
+
+    const sourceText = String(newWordData.text ?? "");
+    const approval = prepareApprovedWordReplacement(
+      sourceText,
+      replacementText,
+      false,
+    );
+
+    if (!approval) return false;
+
+    const targetWordRef = doc(db, "clouds", cloudId, "words", approval.normalized);
+    const targetWordSnapshot = await transaction.get(targetWordRef);
+    const finalApproval = prepareApprovedWordReplacement(
+      sourceText,
+      replacementText,
+      targetWordSnapshot.exists(),
+    );
+
+    if (!finalApproval) return false;
+
+    if (finalApproval.action === "increment") {
+      transaction.update(targetWordRef, {
+        count: increment(1),
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      transaction.set(targetWordRef, {
+        text: finalApproval.text,
+        normalized: finalApproval.normalized,
+        count: 1,
+        aliases: [],
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
 
     transaction.update(newWordRef, {
       status: "approved",

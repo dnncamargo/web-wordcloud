@@ -21,7 +21,6 @@ const MAX_PASSWORD_LENGTH = 1024;
 type SessionState = {
   configured: boolean;
   authenticated: boolean;
-  model?: string;
 };
 
 export type AiAdminSessionRouteDependencies = Readonly<{
@@ -47,7 +46,6 @@ function getSessionState(
   return {
     configured,
     authenticated: configured && authenticated,
-    ...(configured ? { model: dependencies.getModel() } : {}),
   };
 }
 

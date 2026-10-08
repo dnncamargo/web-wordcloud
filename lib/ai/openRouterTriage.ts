@@ -1,28 +1,16 @@
 import "server-only";
 
 import { getOpenRouterApiKey, getOpenRouterModel } from "@/lib/ai/openRouterConfig";
+import type {
+  TriageInput,
+  TriageResult,
+  TriageWord,
+} from "@/lib/ai/triage-contract";
+
+export type { TriageInput, TriageResult, TriageWord } from "@/lib/ai/triage-contract";
 
 const OPENROUTER_CHAT_COMPLETIONS_URL =
   "https://openrouter.ai/api/v1/chat/completions";
-
-export type TriageWord = Readonly<{
-  id: string;
-  text: string;
-}>;
-
-export type TriageInput = Readonly<{
-  question: string;
-  acceptedWords: readonly TriageWord[];
-  pendingWords: readonly TriageWord[];
-}>;
-
-export type TriageResult = Readonly<{
-  id: string;
-  relevance: number;
-  attention: boolean;
-  spellingSuggestion: string | null;
-  mergeTargetId: string | null;
-}>;
 
 type JsonRecord = Record<string, unknown>;
 
