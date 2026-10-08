@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   activateCloud,
+  autoAggregateEquivalentNewWord,
   approveNewWord,
   approveNewWordAs,
   archiveCloud,
@@ -23,11 +24,13 @@ import {
   blowWind,
 } from "@/lib/firebase/cloudService";
 import { normalizeWord } from "@/lib/normalizeWord";
+import { findUniqueExactAcceptedWord } from "@/lib/firebase/autoAggregation";
 import AiAdminControl from "@/components/AiAdminControl";
 import type { AiSessionState } from "@/lib/ai/admin-session-contract";
 import {
   createTriageSnapshot,
   isMeaningfullyDifferentSpelling,
+  isTriageQuestionDraftCurrent,
   isTriageRequestEligible,
   isTriageSnapshotCurrent,
   orderTriageWords,
@@ -71,6 +74,7 @@ export default function SkyPanel() {
   const [analysisResultRevision, setAnalysisResultRevision] = useState<number | null>(null);
   const analysisInFlightRef = useRef(false);
   const analysisRevisionRef = useRef(0);
+  const autoAggregationStateRef = useRef(new Map<string, "processing" | "completed">());
 
   const selectedCloud = clouds.find((cloud) => cloud.id === selectedCloudId) ?? null;
   const visibleClouds = clouds.filter((cloud) => (showArchivedClouds ? cloud.status === "archived" : cloud.status !== "archived"));
@@ -78,16 +82,17 @@ export default function SkyPanel() {
     () =>
       createTriageSnapshot(
         selectedCloudId,
-        questionDraft,
+        selectedCloud?.publicTitle ?? "",
         words,
         newWords,
       ),
-    [newWords, questionDraft, selectedCloudId, words],
+    [newWords, selectedCloud?.publicTitle, selectedCloudId, words],
   );
   const latestTriageSnapshotRef = useRef(currentTriageSnapshot);
 
   const currentAnalysisItems =
     analysisResultRevision === analysisRevision &&
+    isTriageQuestionDraftCurrent(selectedCloud?.publicTitle ?? "", questionDraft) &&
     analysisSnapshot &&
     analysisItems &&
     isTriageSnapshotCurrent(analysisSnapshot, currentTriageSnapshot)
@@ -169,6 +174,47 @@ export default function SkyPanel() {
   }, [invalidateAnalysis, selectedCloudId]);
 
   useEffect(() => {
+    if (!selectedCloudId) return;
+
+    const pendingWordIds = new Set(newWords.map((word) => word.id));
+
+    for (const key of autoAggregationStateRef.current.keys()) {
+      const [cloudId, newWordId] = key.split("::");
+
+      if (cloudId === selectedCloudId && !pendingWordIds.has(newWordId)) {
+        autoAggregationStateRef.current.delete(key);
+      }
+    }
+
+    if (words.length === 0 || newWords.length === 0) return;
+
+    for (const newWord of newWords) {
+      const targetWord = findUniqueExactAcceptedWord(newWord.text, words);
+
+      if (!targetWord) continue;
+
+      const key = `${selectedCloudId}::${newWord.id}`;
+
+      if (autoAggregationStateRef.current.has(key)) continue;
+
+      autoAggregationStateRef.current.set(key, "processing");
+
+      void autoAggregateEquivalentNewWord(selectedCloudId, newWord.id, targetWord.id)
+        .then((didAggregate) => {
+          if (didAggregate) {
+            autoAggregationStateRef.current.set(key, "completed");
+          } else {
+            autoAggregationStateRef.current.delete(key);
+          }
+        })
+        .catch((error) => {
+          autoAggregationStateRef.current.delete(key);
+          console.error("Não foi possível autoagregar a nova ideia.", error);
+        });
+    }
+  }, [newWords, selectedCloudId, words]);
+
+  useEffect(() => {
     setTitleDraft(selectedCloud?.title ?? "");
     setQuestionDraft(selectedCloud?.publicTitle ?? "");
   }, [selectedCloud?.id, selectedCloud?.title, selectedCloud?.publicTitle]);
@@ -223,6 +269,11 @@ export default function SkyPanel() {
   async function handleAiAnalysis() {
     if (analysisInFlightRef.current) return;
 
+    if (selectedCloud && questionDraft !== selectedCloud.publicTitle) {
+      setAnalysisError("Finalize e salve a pergunta antes de analisar.");
+      return;
+    }
+
     const input: TriageInput | null = selectedCloud
       ? {
           question: selectedCloud.publicTitle,
@@ -250,7 +301,7 @@ export default function SkyPanel() {
 
     const requestedSnapshot = createTriageSnapshot(
       selectedCloudId,
-      questionDraft,
+      input.question,
       words,
       newWords,
     );

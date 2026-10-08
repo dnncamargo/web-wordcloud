@@ -270,6 +270,43 @@ export async function approveNewWord(cloudId: string, newWordId: string, text: s
   });
 }
 
+export async function autoAggregateEquivalentNewWord(cloudId: string, newWordId: string, targetWordId: string) {
+  const newWordRef = doc(db, "clouds", cloudId, "newWords", newWordId);
+  const targetWordRef = doc(db, "clouds", cloudId, "words", targetWordId);
+
+  return runTransaction(db, async (transaction) => {
+    const newWordSnapshot = await transaction.get(newWordRef);
+    const targetWordSnapshot = await transaction.get(targetWordRef);
+
+    if (!newWordSnapshot.exists() || !targetWordSnapshot.exists()) return false;
+
+    const newWordData = newWordSnapshot.data();
+    const targetWordData = targetWordSnapshot.data();
+    const status = String(newWordData.status ?? "pending");
+
+    if (status !== "pending") return false;
+
+    const newWordText = String(newWordData.text ?? "");
+    const targetWordText = String(targetWordData.text ?? "");
+    const newWordNormalized = normalizeWord(newWordText);
+    const targetWordNormalized = normalizeWord(targetWordText);
+
+    if (!newWordNormalized || !targetWordNormalized || newWordNormalized !== targetWordNormalized) return false;
+
+    transaction.update(targetWordRef, {
+      count: increment(1),
+      updatedAt: serverTimestamp(),
+    });
+
+    transaction.update(newWordRef, {
+      status: "approved",
+      reviewedAt: serverTimestamp(),
+    });
+
+    return true;
+  });
+}
+
 export async function approveNewWordAs(
   cloudId: string,
   newWordId: string,

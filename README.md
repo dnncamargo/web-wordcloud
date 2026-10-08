@@ -144,7 +144,7 @@ Responsável por:
 * ativar nuvens;
 * arquivar nuvens.
 
-Cada decisão sobre uma nova ideia é feita pelo professor. A aprovação normal preserva a grafia enviada; quando o professor escolhe explicitamente uma sugestão de ortografia, a operação transacional usa a grafia escolhida sem reescrever a submissão original.
+Submissões cuja chave é exatamente equivalente pela normalização determinística existente podem ser autoagregadas à palavra aceita quando há uma única correspondência, preservando a grafia canônica já aceita. Se houver mais de uma correspondência aceita, a ideia permanece pendente. Similaridade semântica continua reservada para uma sugestão explícita de IA. A aprovação normal preserva a grafia enviada; quando o professor escolhe explicitamente uma sugestão de ortografia, a operação transacional usa a grafia escolhida sem reescrever a submissão original.
 
 ---
 

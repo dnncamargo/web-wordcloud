@@ -1,4 +1,3 @@
-import { normalizeWord } from "@/lib/normalizeWord";
 import {
   MAX_BODY_BYTES,
   MAX_ACCEPTED_WORDS,
@@ -31,6 +30,13 @@ export type TriageRequestEligibility = Readonly<{
   cloudId: string | null;
   input: unknown;
 }>;
+
+export function isTriageQuestionDraftCurrent(
+  persistedQuestion: string,
+  questionDraft: string,
+) {
+  return persistedQuestion === questionDraft;
+}
 
 export function createTriageSnapshot(
   cloudId: string | null,
@@ -134,11 +140,10 @@ export function isMeaningfullyDifferentSpelling(
 ) {
   if (suggestion === null) return false;
 
-  const submittedNormalized = normalizeWord(submittedText);
-  const suggestionNormalized = normalizeWord(suggestion);
+  const submittedComparable = submittedText.trim().toLocaleLowerCase("pt-BR");
+  const suggestionComparable = suggestion.trim().toLocaleLowerCase("pt-BR");
 
   return (
-    suggestion.trim() !== submittedText.trim() &&
-    suggestionNormalized !== submittedNormalized
+    suggestionComparable !== submittedComparable
   );
 }

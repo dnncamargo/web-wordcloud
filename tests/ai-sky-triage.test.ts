@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   createTriageSnapshot,
   isMeaningfullyDifferentSpelling,
+  isTriageQuestionDraftCurrent,
   isTriageRequestEligible,
   isTriageSnapshotCurrent,
   orderTriageWords,
@@ -14,6 +15,9 @@ import {
   type TriageInput,
   type TriageResult,
 } from "../lib/ai/triage-contract";
+import {
+  findUniqueExactAcceptedWord,
+} from "../lib/firebase/autoAggregation";
 import {
   prepareApprovedWordReplacement,
   prepareOriginalApprovedWord,
@@ -84,6 +88,28 @@ test("analysis snapshot invalidates on context changes and remains current other
   assert.equal(isTriageSnapshotCurrent(snapshot, createTriageSnapshot("cloud-1", input.question, acceptedWords, [{ ...pendingWords[0], text: "Escutar" }, ...pendingWords.slice(1)])), false);
 });
 
+test("exact normalized aggregation selects only one canonical accepted word", () => {
+  assert.deepEqual(
+    findUniqueExactAcceptedWord("  Árvore  ", [
+      { id: "word-1", text: "árvore" },
+      { id: "word-2", text: "casa" },
+    ]),
+    { id: "word-1", text: "árvore" },
+  );
+  assert.equal(
+    findUniqueExactAcceptedWord("arvore", [
+      { id: "word-1", text: "árvore" },
+      { id: "word-2", text: "ARVORE" },
+    ]),
+    null,
+  );
+});
+
+test("analysis requires the visible question draft to be saved first", () => {
+  assert.equal(isTriageQuestionDraftCurrent("Como cuidar?", "Como cuidar?"), true);
+  assert.equal(isTriageQuestionDraftCurrent("Como cuidar?", "Como cuidar melhor?"), false);
+});
+
 test("local request eligibility blocks unauthenticated, empty, and oversized sets", () => {
   assert.equal(isTriageRequestEligible({ authenticated: false, cloudId: "cloud-1", input }), false);
   assert.equal(isTriageRequestEligible({ authenticated: true, cloudId: "cloud-1", input: { ...input, pendingWords: [] } }), false);
@@ -101,8 +127,10 @@ test("local request eligibility blocks unauthenticated, empty, and oversized set
 });
 
 test("spelling suggestions must be meaningfully different and replacement approval preserves source text", () => {
-  assert.equal(isMeaningfullyDifferentSpelling("Caza", "Casa"), true);
+  assert.equal(isMeaningfullyDifferentSpelling("arvore", "árvore"), true);
+  assert.equal(isMeaningfullyDifferentSpelling("voce", "você"), true);
   assert.equal(isMeaningfullyDifferentSpelling("Casa", " casa "), false);
+  assert.equal(isMeaningfullyDifferentSpelling("Casa", "Casa"), false);
   assert.deepEqual(prepareApprovedWordReplacement("  Caza  ", " Casa ", false), {
     sourceText: "Caza",
     text: "Casa",
