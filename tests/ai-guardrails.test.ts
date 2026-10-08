@@ -501,7 +501,7 @@ test("empty pending words return without requiring Redis or OpenRouter", async (
     pendingWords: [],
   });
 
-  assert.deepEqual(results, []);
+  assert.deepEqual(results, { results: [], acceptedMergeSuggestions: [] });
 });
 
 test("unicode limits count code points rather than UTF-16 code units", () => {

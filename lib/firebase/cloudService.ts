@@ -5,6 +5,10 @@ import {
   prepareOriginalApprovedWord,
 } from "@/lib/firebase/wordApproval";
 import { prepareCanonicalWordChange } from "@/lib/firebase/canonicalWord";
+import {
+  getAcceptedMergeDocumentRoles,
+  prepareAcceptedWordMerge,
+} from "@/lib/firebase/acceptedWordMerge";
 import { addDoc, collection, deleteDoc, doc, getDoc, increment, onSnapshot, runTransaction, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
 
 export type FirebaseCloud = {
@@ -430,6 +434,63 @@ export async function chooseCanonicalWordForm(
       aliases: decision.change.aliases,
       updatedAt: serverTimestamp(),
     });
+
+    return true;
+  });
+}
+
+export async function mergeAcceptedWords(
+  cloudId: string,
+  firstWordId: string,
+  secondWordId: string,
+  canonicalText: string,
+) {
+  const documentRoles = getAcceptedMergeDocumentRoles(firstWordId, secondWordId);
+
+  if (!documentRoles) return false;
+
+  const survivorWordRef = doc(db, "clouds", cloudId, "words", documentRoles.survivorId);
+  const absorbedWordRef = doc(db, "clouds", cloudId, "words", documentRoles.absorbedId);
+
+  return runTransaction(db, async (transaction) => {
+    const survivorWordSnapshot = await transaction.get(survivorWordRef);
+    const absorbedWordSnapshot = await transaction.get(absorbedWordRef);
+
+    if (!survivorWordSnapshot.exists() || !absorbedWordSnapshot.exists()) {
+      return false;
+    }
+
+    const survivorWordData = survivorWordSnapshot.data();
+    const absorbedWordData = absorbedWordSnapshot.data();
+    const decision = prepareAcceptedWordMerge(
+      {
+        id: survivorWordSnapshot.id,
+        text: String(survivorWordData.text ?? ""),
+        count: Number(survivorWordData.count ?? 0),
+        aliases: Array.isArray(survivorWordData.aliases)
+          ? survivorWordData.aliases.map(String)
+          : [],
+      },
+      {
+        id: absorbedWordSnapshot.id,
+        text: String(absorbedWordData.text ?? ""),
+        count: Number(absorbedWordData.count ?? 0),
+        aliases: Array.isArray(absorbedWordData.aliases)
+          ? absorbedWordData.aliases.map(String)
+          : [],
+      },
+      canonicalText,
+    );
+
+    if (decision.kind !== "update") return false;
+
+    transaction.update(survivorWordRef, {
+      text: decision.change.text,
+      count: decision.change.count,
+      aliases: decision.change.aliases,
+      updatedAt: serverTimestamp(),
+    });
+    transaction.delete(absorbedWordRef);
 
     return true;
   });

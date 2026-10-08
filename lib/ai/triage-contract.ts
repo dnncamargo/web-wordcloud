@@ -5,6 +5,7 @@ export const MAX_WORD_TEXT_CODE_POINTS = 256;
 export const MAX_ACCEPTED_WORDS = 100;
 export const MAX_PENDING_WORDS = 40;
 export const MAX_COMBINED_WORDS = 120;
+export const MAX_ACCEPTED_MERGE_SUGGESTIONS = 100;
 
 export type TriageWord = Readonly<{
   id: string;
@@ -22,7 +23,16 @@ export type TriageResult = Readonly<{
   relevance: number;
   attention: boolean;
   spellingSuggestion: string | null;
-  mergeTargetId: string | null;
+}>;
+
+export type AcceptedMergeSuggestion = Readonly<{
+  firstId: string;
+  secondId: string;
+}>;
+
+export type TriageResponse = Readonly<{
+  results: readonly TriageResult[];
+  acceptedMergeSuggestions: readonly AcceptedMergeSuggestion[];
 }>;
 
 export class TriageValidationError extends Error {
@@ -120,12 +130,15 @@ export function validateTriageResults(
   value: unknown,
   pendingWords: readonly TriageWord[],
   acceptedWords: readonly TriageWord[],
-): TriageResult[] {
+): TriageResponse {
   if (
     !isRecord(value) ||
-    !hasExactKeys(value, ["results"]) ||
+    !hasExactKeys(value, ["results", "acceptedMergeSuggestions"]) ||
     !Array.isArray(value.results) ||
-    value.results.length !== pendingWords.length
+    value.results.length !== pendingWords.length ||
+    !Array.isArray(value.acceptedMergeSuggestions) ||
+    value.acceptedMergeSuggestions.length > MAX_ACCEPTED_MERGE_SUGGESTIONS ||
+    (acceptedWords.length < 2 && value.acceptedMergeSuggestions.length > 0)
   ) {
     throw new TriageValidationError("Incomplete triage result.");
   }
@@ -133,8 +146,9 @@ export function validateTriageResults(
   const pendingIds = new Set(pendingWords.map((word) => word.id));
   const acceptedIds = new Set(acceptedWords.map((word) => word.id));
   const seenIds = new Set<string>();
+  const acceptedMergeValues = value.acceptedMergeSuggestions as unknown[];
 
-  return value.results.map((result, index) => {
+  const results = value.results.map((result, index) => {
     if (
       !isRecord(result) ||
       !hasExactKeys(result, [
@@ -142,7 +156,6 @@ export function validateTriageResults(
         "relevance",
         "attention",
         "spellingSuggestion",
-        "mergeTargetId",
       ]) ||
       typeof result.id !== "string" ||
       !pendingIds.has(result.id) ||
@@ -154,10 +167,7 @@ export function validateTriageResults(
       typeof result.attention !== "boolean" ||
       (result.spellingSuggestion !== null &&
         (typeof result.spellingSuggestion !== "string" ||
-          result.spellingSuggestion.trim().length === 0)) ||
-      (result.mergeTargetId !== null &&
-        (typeof result.mergeTargetId !== "string" ||
-          !acceptedIds.has(result.mergeTargetId)))
+          result.spellingSuggestion.trim().length === 0))
     ) {
       throw new TriageValidationError(`Invalid triage result at index ${index}.`);
     }
@@ -169,7 +179,38 @@ export function validateTriageResults(
       relevance: result.relevance,
       attention: result.attention,
       spellingSuggestion: result.spellingSuggestion,
-      mergeTargetId: result.mergeTargetId,
     };
   });
+
+  const seenPairs = new Set<string>();
+  const acceptedMergeSuggestions: AcceptedMergeSuggestion[] = [];
+
+  for (const suggestion of acceptedMergeValues) {
+    if (
+      !isRecord(suggestion) ||
+      !hasExactKeys(suggestion, ["firstId", "secondId"]) ||
+      typeof suggestion.firstId !== "string" ||
+      typeof suggestion.secondId !== "string" ||
+      !acceptedIds.has(suggestion.firstId) ||
+      !acceptedIds.has(suggestion.secondId) ||
+      suggestion.firstId === suggestion.secondId
+    ) {
+      throw new TriageValidationError("Invalid accepted merge suggestion.");
+    }
+
+    const pairKey = [suggestion.firstId, suggestion.secondId].sort().join("\u0000");
+
+    if (seenPairs.has(pairKey)) continue;
+
+    seenPairs.add(pairKey);
+    acceptedMergeSuggestions.push({
+      firstId: suggestion.firstId,
+      secondId: suggestion.secondId,
+    });
+  }
+
+  return {
+    results,
+    acceptedMergeSuggestions,
+  };
 }

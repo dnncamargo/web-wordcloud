@@ -5,7 +5,7 @@ import type { GuardrailDecision } from "@/lib/ai/guardrails";
 import {
   getOpenRouterTriageFailureDiagnostic,
   type OpenRouterTriageFailureDiagnostic,
-  type TriageResult,
+  type TriageResponse,
 } from "@/lib/ai/openRouterTriage";
 import {
   hasOversizedContentLength,
@@ -22,7 +22,7 @@ export type AiTriageRouteDependencies = Readonly<{
   getSession: () => Promise<AiAdminSession | null>;
   hasProvider: () => boolean;
   authorizePaidTriage: () => Promise<GuardrailDecision>;
-  triagePendingWords: (input: unknown) => Promise<TriageResult[]>;
+  triagePendingWords: (input: unknown) => Promise<TriageResponse>;
   logFailure: (diagnostic: OpenRouterTriageFailureDiagnostic) => void;
 }>;
 
@@ -58,8 +58,11 @@ export function createAiTriagePost(
       return jsonNoStore({ error: "Entrada de triagem inválida." }, 400);
     }
 
-    if (inputResult.input.pendingWords.length === 0) {
-      return jsonNoStore([]);
+    if (
+      inputResult.input.pendingWords.length === 0 &&
+      inputResult.input.acceptedWords.length < 2
+    ) {
+      return jsonNoStore({ results: [], acceptedMergeSuggestions: [] });
     }
 
     if (!dependencies.hasProvider()) {

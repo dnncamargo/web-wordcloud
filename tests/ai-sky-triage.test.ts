@@ -44,13 +44,13 @@ function result(id: string, relevance: number, attention = false): TriageResult 
     relevance,
     attention,
     spellingSuggestion: null,
-    mergeTargetId: null,
   };
 }
 
 test("client triage response requires exactly one valid result per pending id", () => {
   const valid = {
     results: [result("pending-1", 0.5), result("pending-2", 0.4), result("pending-3", 0.3)],
+    acceptedMergeSuggestions: [],
   };
 
   assert.doesNotThrow(() => validateTriageResults(valid, pendingWords, acceptedWords));
@@ -59,11 +59,36 @@ test("client triage response requires exactly one valid result per pending id", 
   assert.throws(() => validateTriageResults({ results: [result("pending-1", 0.5)] }, pendingWords, acceptedWords));
 });
 
-test("client response reader validates the array returned by the route", async () => {
-  const response = new Response(JSON.stringify([result("pending-1", 0.5), result("pending-2", 0.4), result("pending-3", 0.3)]));
+test("accepted merge validation is limited to distinct accepted ids and deduplicates reversed pairs", () => {
+  const validated = validateTriageResults({
+    results: pendingWords.map((word, index) => result(word.id, 0.5 - index / 10)),
+    acceptedMergeSuggestions: [
+      { firstId: "accepted-1", secondId: "accepted-2" },
+      { firstId: "accepted-2", secondId: "accepted-1" },
+    ],
+  }, pendingWords, acceptedWords);
+
+  assert.deepEqual(validated.acceptedMergeSuggestions, [
+    { firstId: "accepted-1", secondId: "accepted-2" },
+  ]);
+  assert.throws(() => validateTriageResults({
+    results: pendingWords.map((word) => result(word.id, 0.5)),
+    acceptedMergeSuggestions: [{ firstId: "accepted-1", secondId: "accepted-1" }],
+  }, pendingWords, acceptedWords));
+  assert.throws(() => validateTriageResults({
+    results: pendingWords.map((word) => result(word.id, 0.5)),
+    acceptedMergeSuggestions: [{ firstId: "accepted-1", secondId: "pending-1" }],
+  }, pendingWords, acceptedWords));
+});
+
+test("client response reader validates the object returned by the route", async () => {
+  const response = new Response(JSON.stringify({
+    results: [result("pending-1", 0.5), result("pending-2", 0.4), result("pending-3", 0.3)],
+    acceptedMergeSuggestions: [],
+  }));
   const results = await readTriageResponse(response, input);
 
-  assert.equal(results.length, pendingWords.length);
+  assert.equal(results.results.length, pendingWords.length);
 });
 
 test("relevance orders pending ideas stably while display data hides the score", () => {
@@ -75,7 +100,7 @@ test("relevance orders pending ideas stably while display data hides the score",
 
   assert.deepEqual(displayItems.map((item) => item.word.id), ["pending-1", "pending-2", "pending-3"]);
   assert.equal(displayItems[0].attention, true);
-  assert.deepEqual(Object.keys(displayItems[0]).sort(), ["attention", "mergeTargetId", "spellingSuggestion", "word"]);
+  assert.deepEqual(Object.keys(displayItems[0]).sort(), ["attention", "spellingSuggestion", "word"]);
   assert.doesNotMatch(JSON.stringify(displayItems), /relevance/);
 });
 
@@ -110,9 +135,10 @@ test("analysis requires the visible question draft to be saved first", () => {
   assert.equal(isTriageQuestionDraftCurrent("Como cuidar?", "Como cuidar melhor?"), false);
 });
 
-test("local request eligibility blocks unauthenticated, empty, and oversized sets", () => {
+test("local request eligibility allows accepted-only analysis but blocks no work", () => {
   assert.equal(isTriageRequestEligible({ authenticated: false, cloudId: "cloud-1", input }), false);
-  assert.equal(isTriageRequestEligible({ authenticated: true, cloudId: "cloud-1", input: { ...input, pendingWords: [] } }), false);
+  assert.equal(isTriageRequestEligible({ authenticated: true, cloudId: "cloud-1", input: { ...input, acceptedWords: acceptedWords.slice(0, 1), pendingWords: [] } }), false);
+  assert.equal(isTriageRequestEligible({ authenticated: true, cloudId: "cloud-1", input: { ...input, pendingWords: [] } }), true);
   assert.equal(isTriageRequestEligible({ authenticated: true, cloudId: "cloud-1", input: { ...input, pendingWords: Array.from({ length: 41 }, (_, index) => ({ id: `pending-${index}`, text: "Ideia" })) } }), false);
   assert.equal(isTriageRequestEligible({
     authenticated: true,

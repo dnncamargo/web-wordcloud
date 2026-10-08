@@ -5,6 +5,7 @@ import {
   MAX_PENDING_WORDS,
   TriageValidationError,
   type TriageInput,
+  type TriageResponse,
   type TriageResult,
   type TriageWord,
   validateTriageInput,
@@ -22,7 +23,6 @@ export type TriageDisplayItem<TWord> = Readonly<{
   word: TWord;
   attention: boolean;
   spellingSuggestion: string | null;
-  mergeTargetId: string | null;
 }>;
 
 export type TriageRequestEligibility = Readonly<{
@@ -89,7 +89,7 @@ export function isTriageRequestEligible({
       validated.pendingWords.length <= MAX_PENDING_WORDS &&
       validated.acceptedWords.length + validated.pendingWords.length <=
         MAX_COMBINED_WORDS &&
-      validated.pendingWords.length > 0 &&
+      (validated.pendingWords.length > 0 || validated.acceptedWords.length >= 2) &&
       new TextEncoder().encode(JSON.stringify(validated)).byteLength <= MAX_BODY_BYTES
     );
   } catch {
@@ -100,16 +100,12 @@ export function isTriageRequestEligible({
 export async function readTriageResponse(
   response: Response,
   input: TriageInput,
-): Promise<TriageResult[]> {
+): Promise<TriageResponse> {
   if (!response.ok) throw new TriageValidationError(`HTTP ${response.status}`);
 
   const payload: unknown = await response.json();
 
-  return validateTriageResults(
-    { results: payload },
-    input.pendingWords,
-    input.acceptedWords,
-  );
+  return validateTriageResults(payload, input.pendingWords, input.acceptedWords);
 }
 
 export function orderTriageWords<TWord extends TriageWord>(
@@ -130,7 +126,6 @@ export function orderTriageWords<TWord extends TriageWord>(
       word,
       attention: result?.attention ?? false,
       spellingSuggestion: result?.spellingSuggestion ?? null,
-      mergeTargetId: result?.mergeTargetId ?? null,
     }));
 }
 
