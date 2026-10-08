@@ -47,7 +47,7 @@ import {
   isTriageRequestEligible,
   isTriageSnapshotCurrent,
   orderTriageWords,
-  shouldShowPendingManualMerge,
+  getPendingManualMergeUiState,
   readTriageResponse,
   type TriageDisplayItem,
   type TriageSnapshot,
@@ -92,6 +92,7 @@ export default function SkyPanel() {
   const [acceptedMergeSuggestions, setAcceptedMergeSuggestions] = useState<AcceptedMergeSuggestion[]>([]);
   const [acceptedMergeCanonicalSelections, setAcceptedMergeCanonicalSelections] = useState<Record<string, string>>({});
   const [selectedSpellings, setSelectedSpellings] = useState<PendingSpellingSelections>({});
+  const [expandedManualMergePendingWordId, setExpandedManualMergePendingWordId] = useState<string | null>(null);
   const analysisInFlightRef = useRef(false);
   const analysisRevisionRef = useRef(0);
   const autoAggregationStateRef = useRef(new Map<string, "processing" | "completed">());
@@ -148,6 +149,7 @@ export default function SkyPanel() {
     setAcceptedMergeCanonicalSelections({});
     setAnalysisError("");
     setSelectedSpellings({});
+    setExpandedManualMergePendingWordId(null);
   }, []);
 
   useEffect(() => {
@@ -776,6 +778,25 @@ export default function SkyPanel() {
             displayPendingItems.map(({ word, attention, spellingSuggestion }) => {
               const hasSpellingSuggestion = isMeaningfullyDifferentSpelling(word.text, spellingSuggestion);
               const selectedSpelling = selectedSpellings[word.id];
+              const manualMergeState = getPendingManualMergeUiState({
+                hasCurrentAnalysis,
+                pendingWordId: word.id,
+                expandedPendingWordId: expandedManualMergePendingWordId,
+                acceptedWordCount: words.length,
+              });
+              const manualMergeSelector = (
+                <select defaultValue="" onChange={(event) => handleMerge(word, event.target.value)}>
+                  <option value="" disabled>
+                    Mesclar com...
+                  </option>
+
+                  {words.map((acceptedWord) => (
+                    <option key={acceptedWord.id} value={acceptedWord.id}>
+                      {acceptedWord.text}
+                    </option>
+                  ))}
+                </select>
+              );
 
               return (
               <article key={word.id} className={`new-clean-word ${attention ? "ai-needs-attention" : ""}`}>
@@ -828,19 +849,31 @@ export default function SkyPanel() {
                   </button>
                 </div>
 
-                {shouldShowPendingManualMerge(hasCurrentAnalysis, attention) && (
-                  <select defaultValue="" onChange={(event) => handleMerge(word, event.target.value)} disabled={words.length === 0}>
-                    <option value="" disabled>
-                      Mesclar com...
-                    </option>
-
-                    {words.map((acceptedWord) => (
-                      <option key={acceptedWord.id} value={acceptedWord.id}>
-                        {acceptedWord.text}
-                      </option>
-                    ))}
-                  </select>
-                )}
+                {manualMergeState.showCompactAction ? (
+                  manualMergeState.showSelector ? (
+                    <div className="pending-manual-merge-expanded">
+                      {manualMergeSelector}
+                      <button
+                        className="button pending-manual-merge-cancel"
+                        onClick={() => setExpandedManualMergePendingWordId(null)}
+                        type="button"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      className="button pending-manual-merge-toggle"
+                      disabled={manualMergeState.compactActionDisabled}
+                      onClick={() => setExpandedManualMergePendingWordId(word.id)}
+                      type="button"
+                    >
+                      Mesclar manualmente
+                    </button>
+                  )
+                ) : manualMergeState.showSelector ? (
+                  manualMergeSelector
+                ) : null}
               </article>
               );
             })

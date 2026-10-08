@@ -602,6 +602,38 @@ input {
   font: inherit;
 }
 
+.pending-manual-merge-toggle {
+  margin-top: 2px;
+  padding: 0.46rem 0.58rem;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.72rem;
+  box-shadow: none;
+}
+
+.pending-manual-merge-toggle:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.pending-manual-merge-expanded {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pending-manual-merge-expanded select {
+  flex: 1;
+  min-width: 0;
+}
+
+.pending-manual-merge-cancel {
+  flex-shrink: 0;
+  padding: 0.46rem 0.58rem;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
 .clean-empty,
 .clean-feedback {
   color: var(--muted);

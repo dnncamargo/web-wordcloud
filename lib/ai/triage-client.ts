@@ -31,6 +31,22 @@ export type TriageRequestEligibility = Readonly<{
   input: unknown;
 }>;
 
+export type PendingManualMergeUiState = Readonly<{
+  mode: "permanent" | "compact";
+  canMerge: boolean;
+  isExpanded: boolean;
+  showSelector: boolean;
+  showCompactAction: boolean;
+  compactActionDisabled: boolean;
+}>;
+
+type PendingManualMergeUiStateInput = Readonly<{
+  hasCurrentAnalysis: boolean;
+  pendingWordId: string;
+  expandedPendingWordId: string | null;
+  acceptedWordCount: number;
+}>;
+
 export function isTriageQuestionDraftCurrent(
   persistedQuestion: string,
   questionDraft: string,
@@ -129,11 +145,35 @@ export function orderTriageWords<TWord extends TriageWord>(
     }));
 }
 
-export function shouldShowPendingManualMerge(
-  hasCurrentAnalysis: boolean,
-  attention: boolean,
-) {
-  return !hasCurrentAnalysis || !attention;
+export function getPendingManualMergeUiState({
+  hasCurrentAnalysis,
+  pendingWordId,
+  expandedPendingWordId,
+  acceptedWordCount,
+}: PendingManualMergeUiStateInput): PendingManualMergeUiState {
+  const canMerge = acceptedWordCount > 0;
+
+  if (!hasCurrentAnalysis) {
+    return {
+      mode: "permanent",
+      canMerge,
+      isExpanded: false,
+      showSelector: canMerge,
+      showCompactAction: false,
+      compactActionDisabled: false,
+    };
+  }
+
+  const isExpanded = canMerge && expandedPendingWordId === pendingWordId;
+
+  return {
+    mode: "compact",
+    canMerge,
+    isExpanded,
+    showSelector: isExpanded,
+    showCompactAction: true,
+    compactActionDisabled: !canMerge,
+  };
 }
 
 export function isMeaningfullyDifferentSpelling(

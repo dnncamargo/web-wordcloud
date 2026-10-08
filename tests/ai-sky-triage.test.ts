@@ -8,8 +8,8 @@ import {
   isTriageRequestEligible,
   isTriageSnapshotCurrent,
   orderTriageWords,
+  getPendingManualMergeUiState,
   readTriageResponse,
-  shouldShowPendingManualMerge,
 } from "../lib/ai/triage-client";
 import {
   validateTriageResults,
@@ -105,11 +105,127 @@ test("relevance orders pending ideas stably while display data hides the score",
   assert.doesNotMatch(JSON.stringify(displayItems), /relevance/);
 });
 
-test("manual pending merge stays available except for attention items in current analysis", () => {
-  assert.equal(shouldShowPendingManualMerge(false, false), true);
-  assert.equal(shouldShowPendingManualMerge(false, true), true);
-  assert.equal(shouldShowPendingManualMerge(true, false), true);
-  assert.equal(shouldShowPendingManualMerge(true, true), false);
+test("without current analysis, pending ideas keep the permanent manual merge selector", () => {
+  assert.deepEqual(
+    getPendingManualMergeUiState({
+      hasCurrentAnalysis: false,
+      pendingWordId: "pending-1",
+      expandedPendingWordId: null,
+      acceptedWordCount: acceptedWords.length,
+    }),
+    {
+      mode: "permanent",
+      canMerge: true,
+      isExpanded: false,
+      showSelector: true,
+      showCompactAction: false,
+      compactActionDisabled: false,
+    },
+  );
+});
+
+test("current analysis collapses manual merge and keeps a compact action", () => {
+  assert.deepEqual(
+    getPendingManualMergeUiState({
+      hasCurrentAnalysis: true,
+      pendingWordId: "pending-1",
+      expandedPendingWordId: null,
+      acceptedWordCount: acceptedWords.length,
+    }),
+    {
+      mode: "compact",
+      canMerge: true,
+      isExpanded: false,
+      showSelector: false,
+      showCompactAction: true,
+      compactActionDisabled: false,
+    },
+  );
+});
+
+test("opening manual merge expands only the selected pending idea and cancel is ephemeral", () => {
+  const opened = getPendingManualMergeUiState({
+    hasCurrentAnalysis: true,
+    pendingWordId: "pending-1",
+    expandedPendingWordId: "pending-1",
+    acceptedWordCount: acceptedWords.length,
+  });
+  const sibling = getPendingManualMergeUiState({
+    hasCurrentAnalysis: true,
+    pendingWordId: "pending-2",
+    expandedPendingWordId: "pending-1",
+    acceptedWordCount: acceptedWords.length,
+  });
+  const cancelled = getPendingManualMergeUiState({
+    hasCurrentAnalysis: true,
+    pendingWordId: "pending-1",
+    expandedPendingWordId: null,
+    acceptedWordCount: acceptedWords.length,
+  });
+
+  assert.equal(opened.showSelector, true);
+  assert.equal(sibling.showSelector, false);
+  assert.equal(cancelled.showSelector, false);
+});
+
+test("manual merge availability is identical for attention and non-attention items", () => {
+  const states = [false, true].map((attention) => {
+    const [item] = orderTriageWords(
+      [pendingWords[0]],
+      [result("pending-1", 0.5, attention)],
+    );
+
+    assert.equal(item.attention, attention);
+
+    return getPendingManualMergeUiState({
+      hasCurrentAnalysis: true,
+      pendingWordId: item.word.id,
+      expandedPendingWordId: null,
+      acceptedWordCount: acceptedWords.length,
+    });
+  });
+
+  assert.deepEqual(states[0], states[1]);
+  assert.equal(states[0].showCompactAction, true);
+});
+
+test("stale analysis restores the permanent selector even if an old item was expanded", () => {
+  assert.deepEqual(
+    getPendingManualMergeUiState({
+      hasCurrentAnalysis: false,
+      pendingWordId: "pending-1",
+      expandedPendingWordId: "pending-1",
+      acceptedWordCount: acceptedWords.length,
+    }),
+    {
+      mode: "permanent",
+      canMerge: true,
+      isExpanded: false,
+      showSelector: true,
+      showCompactAction: false,
+      compactActionDisabled: false,
+    },
+  );
+});
+
+test("without accepted words, manual merge has no target selector and compact action is disabled", () => {
+  const normalState = getPendingManualMergeUiState({
+    hasCurrentAnalysis: false,
+    pendingWordId: "pending-1",
+    expandedPendingWordId: null,
+    acceptedWordCount: 0,
+  });
+  const analyzedState = getPendingManualMergeUiState({
+    hasCurrentAnalysis: true,
+    pendingWordId: "pending-1",
+    expandedPendingWordId: "pending-1",
+    acceptedWordCount: 0,
+  });
+
+  assert.equal(normalState.showSelector, false);
+  assert.equal(analyzedState.showSelector, false);
+  assert.equal(analyzedState.showCompactAction, true);
+  assert.equal(analyzedState.compactActionDisabled, true);
 });
 
 test("analysis snapshot invalidates on context changes and remains current otherwise", () => {
