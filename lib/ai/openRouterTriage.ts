@@ -78,6 +78,17 @@ export function getOpenRouterTriageFailureDiagnostic(
 const OPENROUTER_CHAT_COMPLETIONS_URL =
   "https://openrouter.ai/api/v1/chat/completions";
 
+export const OPENROUTER_TRIAGE_REQUEST_OPTIONS = {
+  temperature: 0,
+  max_completion_tokens: 4096,
+  reasoning_effort: "none",
+  provider: {
+    zdr: true,
+    data_collection: "deny",
+    require_parameters: true,
+  },
+} as const;
+
 type JsonRecord = Record<string, unknown>;
 
 function buildTriageResponseSchema(
@@ -412,7 +423,10 @@ function readResponseContent(payload: unknown): {
   return { content: choice.message.content, finishReason };
 }
 
-export async function triagePendingWords(input: unknown): Promise<TriageResponse> {
+export async function triagePendingWordsForEvaluator(
+  input: unknown,
+  systemInstruction: string,
+): Promise<TriageResponse> {
   const validatedInput = validateInput(input);
 
   if (
@@ -431,14 +445,7 @@ export async function triagePendingWords(input: unknown): Promise<TriageResponse
   const model = getOpenRouterModel();
   const requestBody = {
     model,
-    temperature: 0,
-    max_completion_tokens: 4096,
-    reasoning_effort: "none",
-    provider: {
-      zdr: true,
-      data_collection: "deny",
-      require_parameters: true,
-    },
+    ...OPENROUTER_TRIAGE_REQUEST_OPTIONS,
     response_format: {
       type: "json_schema",
       json_schema: {
@@ -451,7 +458,7 @@ export async function triagePendingWords(input: unknown): Promise<TriageResponse
       },
     },
     messages: [
-      { role: "system", content: SYSTEM_INSTRUCTION },
+      { role: "system", content: systemInstruction },
       {
         role: "user",
         content: JSON.stringify({
@@ -506,4 +513,8 @@ export async function triagePendingWords(input: unknown): Promise<TriageResponse
     validatedInput.acceptedWords,
     finishReason,
   );
+}
+
+export async function triagePendingWords(input: unknown): Promise<TriageResponse> {
+  return triagePendingWordsForEvaluator(input, SYSTEM_INSTRUCTION);
 }
