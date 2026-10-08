@@ -8,6 +8,7 @@ import type { GuardrailDecision } from "../lib/ai/guardrails";
 import { createAiTriagePost } from "../lib/ai/triage-route";
 import {
   OpenRouterTriageError,
+  triagePendingWords,
   type OpenRouterTriageFailureDiagnostic,
   type TriageResult,
 } from "../lib/ai/openRouterTriage";
@@ -156,6 +157,49 @@ function createTriageHandler(options: {
   });
 
   return { calls, diagnostics, handler: handlers };
+}
+
+async function runMockedProviderResponse(
+  input: unknown,
+  providerContent: string,
+) {
+  const originalFetch = globalThis.fetch;
+  const originalApiKey = process.env.OPENROUTER_API_KEY;
+  const diagnostics: OpenRouterTriageFailureDiagnostic[] = [];
+
+  process.env.OPENROUTER_API_KEY = "test-only-openrouter-key";
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        choices: [{
+          finish_reason: "stop",
+          message: { content: providerContent },
+        }],
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+
+  try {
+    const handler = createAiTriagePost({
+      getSession: async () => session,
+      hasProvider: () => true,
+      authorizePaidTriage: async () => ({ status: "allowed" }),
+      triagePendingWords,
+      logFailure: (diagnostic) => {
+        diagnostics.push(diagnostic);
+      },
+    });
+
+    const response = await handler(triageRequest(input));
+    return { diagnostics, response };
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalApiKey === undefined) {
+      delete process.env.OPENROUTER_API_KEY;
+    } else {
+      process.env.OPENROUTER_API_KEY = originalApiKey;
+    }
+  }
 }
 
 test("login rejects malformed, wrong-media, and wrong-origin requests before Redis", async () => {
@@ -450,6 +494,110 @@ test("failure diagnostics exclude input, ids, and provider response content", as
   assert.doesNotMatch(diagnosticOutput, /accepted-sensitive-id|pending-sensitive-id/);
   assert.doesNotMatch(diagnosticOutput, /provider response content/);
   assert.deepEqual(diagnostics, [{ code: "provider_unknown_failure" }]);
+});
+
+test("provider result validation emits stable sanitized reasons", async () => {
+  const question = "question-sensitive-content";
+  const pendingId = "pending-sensitive-id";
+  const secondPendingId = "pending-second-sensitive-id";
+  const acceptedId = "accepted-sensitive-id";
+  const inputText = "classroom-sensitive-content";
+  const providerContent = "provider-response-sensitive-content";
+  const validResult = {
+    id: pendingId,
+    relevance: 0.5,
+    attention: false,
+    spellingSuggestion: providerContent,
+    mergeTargetId: null,
+  };
+  const cases = [
+    {
+      reason: "pending_id_invalid",
+      input: {
+        question,
+        acceptedWords: [{ id: acceptedId, text: inputText }],
+        pendingWords: [{ id: pendingId, text: inputText }],
+      },
+      results: [{ ...validResult, id: "unknown-sensitive-id" }],
+    },
+    {
+      reason: "pending_id_duplicate",
+      input: {
+        question,
+        acceptedWords: [{ id: acceptedId, text: inputText }],
+        pendingWords: [
+          { id: pendingId, text: inputText },
+          { id: secondPendingId, text: inputText },
+        ],
+      },
+      results: [validResult, { ...validResult }],
+    },
+    {
+      reason: "relevance_invalid",
+      input: {
+        question,
+        acceptedWords: [{ id: acceptedId, text: inputText }],
+        pendingWords: [{ id: pendingId, text: inputText }],
+      },
+      results: [{ ...validResult, relevance: 2 }],
+    },
+    {
+      reason: "attention_invalid",
+      input: {
+        question,
+        acceptedWords: [{ id: acceptedId, text: inputText }],
+        pendingWords: [{ id: pendingId, text: inputText }],
+      },
+      results: [{ ...validResult, attention: "false" }],
+    },
+    {
+      reason: "spelling_suggestion_invalid",
+      input: {
+        question,
+        acceptedWords: [{ id: acceptedId, text: inputText }],
+        pendingWords: [{ id: pendingId, text: inputText }],
+      },
+      results: [{ ...validResult, spellingSuggestion: "   " }],
+    },
+    {
+      reason: "merge_target_invalid",
+      input: {
+        question,
+        acceptedWords: [{ id: acceptedId, text: inputText }],
+        pendingWords: [{ id: pendingId, text: inputText }],
+      },
+      results: [{
+        ...validResult,
+        mergeTargetId: "unknown-merge-target-sensitive-id",
+      }],
+    },
+  ] as const;
+  const allDiagnostics: OpenRouterTriageFailureDiagnostic[] = [];
+
+  for (const testCase of cases) {
+    const { diagnostics, response } = await runMockedProviderResponse(
+      testCase.input,
+      JSON.stringify({ results: testCase.results }),
+    );
+
+    assert.equal(response.status, 503);
+    allDiagnostics.push(...diagnostics);
+    assert.deepEqual(diagnostics, [{
+      code: "provider_result_invalid",
+      validationReason: testCase.reason,
+      finishReason: "stop",
+    }]);
+  }
+
+  const serializedDiagnostics = JSON.stringify(
+    allDiagnostics,
+  );
+  assert.doesNotMatch(serializedDiagnostics, /question-sensitive-content/);
+  assert.doesNotMatch(serializedDiagnostics, /classroom-sensitive-content/);
+  assert.doesNotMatch(serializedDiagnostics, /provider-response-sensitive-content/);
+  assert.doesNotMatch(serializedDiagnostics, /pending-sensitive-id/);
+  assert.doesNotMatch(serializedDiagnostics, /accepted-sensitive-id/);
+  assert.doesNotMatch(serializedDiagnostics, /unknown-merge-target-sensitive-id/);
 });
 
 test("paid triage route has no Firestore dependency", () => {

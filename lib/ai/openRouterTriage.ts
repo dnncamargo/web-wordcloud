@@ -18,13 +18,31 @@ export type OpenRouterTriageFailureCode =
   | "provider_result_invalid"
   | "provider_unknown_failure";
 
-export type OpenRouterTriageFailureDiagnostic = Readonly<{
-  code: OpenRouterTriageFailureCode;
+export type OpenRouterTriageValidationReason =
+  | "result_shape"
+  | "pending_id_invalid"
+  | "pending_id_duplicate"
+  | "relevance_invalid"
+  | "attention_invalid"
+  | "spelling_suggestion_invalid"
+  | "merge_target_invalid";
+
+type OpenRouterTriageFailureMetadata = Readonly<{
   providerStatus?: number;
   finishReason?: "stop" | "length" | "content_filter" | "tool_calls" | "function_call";
   expectedResultCount?: number;
   actualResultCount?: number;
 }>;
+
+export type OpenRouterTriageFailureDiagnostic =
+  | (OpenRouterTriageFailureMetadata & {
+      code: "provider_result_invalid";
+      validationReason: OpenRouterTriageValidationReason;
+    })
+  | (OpenRouterTriageFailureMetadata & {
+      code: Exclude<OpenRouterTriageFailureCode, "provider_result_invalid">;
+      validationReason?: never;
+    });
 
 export class OpenRouterTriageError extends Error {
   readonly diagnostic: OpenRouterTriageFailureDiagnostic;
@@ -190,24 +208,72 @@ function validateResults(
         "attention",
         "spellingSuggestion",
         "mergeTargetId",
-      ]) ||
-      typeof result.id !== "string" ||
-      !pendingIds.has(result.id) ||
-      seenIds.has(result.id) ||
-      typeof result.relevance !== "number" ||
-      !Number.isFinite(result.relevance) ||
-      result.relevance < 0 ||
-      result.relevance > 1 ||
-      typeof result.attention !== "boolean" ||
-      (result.spellingSuggestion !== null &&
-        (typeof result.spellingSuggestion !== "string" ||
-          result.spellingSuggestion.trim().length === 0)) ||
-      (result.mergeTargetId !== null &&
-        (typeof result.mergeTargetId !== "string" ||
-          !acceptedIds.has(result.mergeTargetId)))
+      ])
     ) {
       throw new OpenRouterTriageError({
         code: "provider_result_invalid",
+        validationReason: "result_shape",
+        finishReason,
+      });
+    }
+
+    if (typeof result.id !== "string" || !pendingIds.has(result.id)) {
+      throw new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "pending_id_invalid",
+        finishReason,
+      });
+    }
+
+    if (seenIds.has(result.id)) {
+      throw new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "pending_id_duplicate",
+        finishReason,
+      });
+    }
+
+    if (
+      typeof result.relevance !== "number" ||
+      !Number.isFinite(result.relevance) ||
+      result.relevance < 0 ||
+      result.relevance > 1
+    ) {
+      throw new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "relevance_invalid",
+        finishReason,
+      });
+    }
+
+    if (typeof result.attention !== "boolean") {
+      throw new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "attention_invalid",
+        finishReason,
+      });
+    }
+
+    if (
+      result.spellingSuggestion !== null &&
+      (typeof result.spellingSuggestion !== "string" ||
+        result.spellingSuggestion.trim().length === 0)
+    ) {
+      throw new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "spelling_suggestion_invalid",
+        finishReason,
+      });
+    }
+
+    if (
+      result.mergeTargetId !== null &&
+      (typeof result.mergeTargetId !== "string" ||
+        !acceptedIds.has(result.mergeTargetId))
+    ) {
+      throw new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "merge_target_invalid",
         finishReason,
       });
     }
