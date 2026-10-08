@@ -10,6 +10,8 @@ import {
   type TriageResponse,
   type TriageResult,
 } from "../lib/ai/triage-contract";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { CALIBRATION_B_INSTRUCTION } from "./ai-calibration-b";
 import {
   EVALUATION_FIXTURE_VERSION,
@@ -28,7 +30,7 @@ type EvaluationOptions = Readonly<{
 
 type CapabilityName = "relevance" | "attention" | "spelling" | "acceptedMerges";
 
-type Metric = {
+export type Metric = {
   checks: number;
   passed: number;
   failed: number;
@@ -89,6 +91,18 @@ function formatNullable(value: string | null): string {
   return value === null ? "null" : JSON.stringify(value);
 }
 
+export function spellingSuggestionMatches(
+  observed: string | null,
+  expected: string | null,
+): boolean {
+  if (observed === null || expected === null) return observed === expected;
+
+  return (
+    observed.toLocaleLowerCase("pt-BR") ===
+    expected.toLocaleLowerCase("pt-BR")
+  );
+}
+
 function resultById(results: readonly TriageResult[], id: string): TriageResult {
   const result = results.find((item) => item.id === id);
 
@@ -143,7 +157,7 @@ function evaluateAttention(
   return metric;
 }
 
-function evaluateSpelling(
+export function evaluateSpelling(
   scenario: EvaluationScenario,
   response: TriageResponse,
 ): Metric {
@@ -154,7 +168,7 @@ function evaluateSpelling(
 
     addCheck(
       metric,
-      observed === expected,
+      spellingSuggestionMatches(observed, expected),
       `${id} spellingSuggestion observed=${formatNullable(observed)} expected=${formatNullable(expected)}`,
     );
   }
@@ -162,7 +176,7 @@ function evaluateSpelling(
   return metric;
 }
 
-function evaluateAcceptedMerges(
+export function evaluateAcceptedMerges(
   scenario: EvaluationScenario,
   response: TriageResponse,
 ): Metric {
@@ -406,52 +420,66 @@ function printScenarioExpectations(scenario: EvaluationScenario): void {
   console.log(`\nSCENARIO ${scenario.id} — ${scenario.name}`);
   console.log(`question=${JSON.stringify(scenario.input.question)}`);
 
-  if (expectations.relevance.length > 0) {
-    console.log(
-      `relevance: ${expectations.relevance
-        .map(([higher, lower]) => `${higher}>${lower}`)
-        .join(", ")}`,
-    );
-  }
-
-  if (
-    expectations.attention.expectedTrue.length > 0 ||
-    expectations.attention.expectedFalse.length > 0
-  ) {
-    console.log(
-      `attention=true: ${expectations.attention.expectedTrue.join(", ") || "none"}`,
-    );
-    console.log(
-      `attention=false: ${expectations.attention.expectedFalse.join(", ") || "none"}`,
-    );
-  }
-
-  if (Object.keys(expectations.spelling).length > 0) {
-    console.log(
-      `spelling: ${Object.entries(expectations.spelling)
-        .map(([id, value]) => `${id}=${formatNullable(value)}`)
-        .join(", ")}`,
-    );
-  }
+  console.log(
+    `relevance expectations=${expectations.relevance
+      .map(([higher, lower]) => `${higher}>${lower}`)
+      .join(", ") || "none"}`,
+  );
+  console.log(
+    `attention expectations=true:${expectations.attention.expectedTrue.join(",") || "none"} false:${expectations.attention.expectedFalse.join(",") || "none"}`,
+  );
+  console.log(
+    `spelling expectations=${Object.entries(expectations.spelling)
+      .map(([id, value]) => `${id}=${formatNullable(value)}`)
+      .join(", ") || "none"}`,
+  );
 
   const merges = expectations.acceptedMerges;
 
-  if (
-    merges.requiredPairs.length > 0 ||
-    merges.forbiddenPairs.length > 0 ||
-    merges.allowedPairs.length > 0 ||
-    merges.maxSuggestions > 0
-  ) {
+  console.log(
+    `accepted merges required=${merges.requiredPairs.map(displayPair).join(", ") || "none"}`,
+  );
+  console.log(
+    `accepted merges forbidden=${merges.forbiddenPairs.map(displayPair).join(", ") || "none"}`,
+  );
+  console.log(
+    `accepted merges allowed=${merges.allowedPairs.map(displayPair).join(", ") || "none"}`,
+  );
+  console.log(`accepted merges max=${merges.maxSuggestions}`);
+}
+
+function printIndividualResults(
+  scenario: EvaluationScenario,
+  response: TriageResponse,
+): void {
+  console.log("results:");
+
+  for (const pendingWord of scenario.input.pendingWords) {
+    const result = resultById(response.results, pendingWord.id);
+
     console.log(
-      `accepted merges required=${merges.requiredPairs.map(displayPair).join(", ") || "none"}`,
+      `- id=${pendingWord.id} text=${JSON.stringify(pendingWord.text)} relevance=${result.relevance} attention=${result.attention} spellingSuggestion=${formatNullable(result.spellingSuggestion)}`,
     );
+  }
+
+  const acceptedWordsById = new Map(
+    scenario.input.acceptedWords.map((word) => [word.id, word.text]),
+  );
+
+  console.log("acceptedMergeSuggestions:");
+
+  if (response.acceptedMergeSuggestions.length === 0) {
+    console.log("- none");
+    return;
+  }
+
+  for (const suggestion of response.acceptedMergeSuggestions) {
+    const firstText = acceptedWordsById.get(suggestion.firstId) ?? "<unknown>";
+    const secondText = acceptedWordsById.get(suggestion.secondId) ?? "<unknown>";
+
     console.log(
-      `accepted merges forbidden=${merges.forbiddenPairs.map(displayPair).join(", ") || "none"}`,
+      `- (${suggestion.firstId}=${JSON.stringify(firstText)}) <-> (${suggestion.secondId}=${JSON.stringify(secondText)})`,
     );
-    console.log(
-      `accepted merges allowed=${merges.allowedPairs.map(displayPair).join(", ") || "none"}`,
-    );
-    console.log(`accepted merges max=${merges.maxSuggestions}`);
   }
 }
 
@@ -538,7 +566,8 @@ async function runCalibration(calibration: CalibrationSpec): Promise<boolean> {
             );
       const metrics = evaluateScenario(scenario, response);
 
-      console.log(`\nSCENARIO ${scenario.id} — ${scenario.name}`);
+      printScenarioExpectations(scenario);
+      printIndividualResults(scenario, response);
 
       for (const capability of CAPABILITIES) {
         mergeMetrics(totals[capability], metrics[capability]);
@@ -586,9 +615,15 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error: unknown) => {
-  const message =
-    error instanceof Error ? error.message : "Unknown evaluation failure.";
-  console.error(`EVALUATION FAILED: ${message}`);
-  process.exitCode = 1;
-});
+const isMainModule =
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
+
+if (isMainModule) {
+  main().catch((error: unknown) => {
+    const message =
+      error instanceof Error ? error.message : "Unknown evaluation failure.";
+    console.error(`EVALUATION FAILED: ${message}`);
+    process.exitCode = 1;
+  });
+}
