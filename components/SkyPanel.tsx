@@ -17,6 +17,7 @@ import {
   listenGlobalSettings,
   listenNewWords,
   listenWords,
+  mergeAcceptedWords,
   mergeNewWordIntoWord,
   rejectNewWord,
   unarchiveCloud,
@@ -25,6 +26,10 @@ import {
   blowWind,
 } from "@/lib/firebase/cloudService";
 import { getCanonicalWordCandidates } from "@/lib/firebase/canonicalWord";
+import {
+  getAcceptedMergeCanonicalCandidates,
+  getAcceptedMergePairKey,
+} from "@/lib/firebase/acceptedWordMerge";
 import { findUniqueExactAcceptedWord } from "@/lib/firebase/autoAggregation";
 import {
   clearPendingSpelling,
@@ -46,7 +51,10 @@ import {
   type TriageDisplayItem,
   type TriageSnapshot,
 } from "@/lib/ai/triage-client";
-import type { TriageInput } from "@/lib/ai/triage-contract";
+import type {
+  AcceptedMergeSuggestion,
+  TriageInput,
+} from "@/lib/ai/triage-contract";
 import { Archive, ArchiveRestore, Plus, Sparkles, Wind, X } from "lucide-react";
 
 function getStatusLabel(status: FirebaseCloud["status"]) {
@@ -80,6 +88,8 @@ export default function SkyPanel() {
   const [analysisError, setAnalysisError] = useState("");
   const [analysisRevision, setAnalysisRevision] = useState(0);
   const [analysisResultRevision, setAnalysisResultRevision] = useState<number | null>(null);
+  const [acceptedMergeSuggestions, setAcceptedMergeSuggestions] = useState<AcceptedMergeSuggestion[]>([]);
+  const [acceptedMergeCanonicalSelections, setAcceptedMergeCanonicalSelections] = useState<Record<string, string>>({});
   const [selectedSpellings, setSelectedSpellings] = useState<PendingSpellingSelections>({});
   const analysisInFlightRef = useRef(false);
   const analysisRevisionRef = useRef(0);
@@ -107,13 +117,19 @@ export default function SkyPanel() {
     isTriageSnapshotCurrent(analysisSnapshot, currentTriageSnapshot)
       ? analysisItems
       : null;
+  const currentAcceptedMergeSuggestions = useMemo(
+    () =>
+      currentAnalysisItems && analysisSnapshot && isTriageSnapshotCurrent(analysisSnapshot, currentTriageSnapshot)
+        ? acceptedMergeSuggestions
+        : [],
+    [acceptedMergeSuggestions, analysisSnapshot, currentAnalysisItems, currentTriageSnapshot],
+  );
   const displayPendingItems =
     currentAnalysisItems ??
     newWords.map((word) => ({
       word,
       attention: false,
       spellingSuggestion: null,
-      mergeTargetId: null,
     }));
 
   useEffect(() => {
@@ -126,6 +142,8 @@ export default function SkyPanel() {
     setAnalysisResultRevision(null);
     setAnalysisSnapshot(null);
     setAnalysisItems(null);
+    setAcceptedMergeSuggestions([]);
+    setAcceptedMergeCanonicalSelections({});
     setAnalysisError("");
     setSelectedSpellings({});
   }, []);
@@ -301,8 +319,8 @@ export default function SkyPanel() {
         setAnalysisError("Ative a IA pelo controle no cabeçalho para solicitar uma análise.");
       } else if (!selectedCloudId) {
         setAnalysisError("Selecione uma nuvem antes de analisar.");
-      } else if (newWords.length === 0) {
-        setAnalysisError("Não há ideias pendentes para analisar.");
+      } else if (newWords.length === 0 && words.length < 2) {
+        setAnalysisError("Não há ideias pendentes nem palavras aceitas suficientes para analisar.");
       } else {
         setAnalysisError("O conjunto atual não pode ser analisado como uma única solicitação.");
       }
@@ -357,7 +375,7 @@ export default function SkyPanel() {
         return;
       }
 
-      const results = await readTriageResponse(response, input);
+      const analysisResponse = await readTriageResponse(response, input);
       const currentSnapshotAfterRequest = latestTriageSnapshotRef.current;
 
       if (
@@ -366,7 +384,8 @@ export default function SkyPanel() {
       ) return;
 
       setAnalysisSnapshot(requestedSnapshot);
-      setAnalysisItems(orderTriageWords(newWords, results));
+      setAnalysisItems(orderTriageWords(newWords, analysisResponse.results));
+      setAcceptedMergeSuggestions([...analysisResponse.acceptedMergeSuggestions]);
       setAnalysisResultRevision(requestedRevision);
     } catch {
       setAnalysisError("Não foi possível concluir a análise.");
@@ -398,6 +417,34 @@ export default function SkyPanel() {
     const didChange = await chooseCanonicalWordForm(selectedCloudId, word.id, candidate);
 
     if (didChange) setFeedback(`Forma canônica alterada para "${candidate}".`);
+  }
+
+  async function handleMergeAcceptedWords(
+    firstWord: FirebaseWord,
+    secondWord: FirebaseWord,
+    pairKey: string,
+  ) {
+    if (!selectedCloudId) return;
+
+    const canonicalText = acceptedMergeCanonicalSelections[pairKey];
+
+    if (!canonicalText) return;
+
+    const didMerge = await mergeAcceptedWords(
+      selectedCloudId,
+      firstWord.id,
+      secondWord.id,
+      canonicalText,
+    );
+
+    if (didMerge) {
+      setAcceptedMergeCanonicalSelections((current) => {
+        const next = { ...current };
+        delete next[pairKey];
+        return next;
+      });
+      setFeedback(`Ideias mescladas com forma canônica "${canonicalText}".`);
+    }
   }
 
   async function handleUpdateAcceptedWord(word: FirebaseWord, value: string) {
@@ -458,6 +505,24 @@ export default function SkyPanel() {
       byDeviceAndIdea,
     };
   }, [newWords]);
+
+  const visibleAcceptedMergeSuggestions = useMemo(() => {
+    const seenPairs = new Set<string>();
+
+    return currentAcceptedMergeSuggestions.flatMap((suggestion) => {
+      const firstWord = words.find((word) => word.id === suggestion.firstId);
+      const secondWord = words.find((word) => word.id === suggestion.secondId);
+
+      if (!firstWord || !secondWord || firstWord.id === secondWord.id) return [];
+
+      const pairKey = getAcceptedMergePairKey(firstWord.id, secondWord.id);
+
+      if (seenPairs.has(pairKey)) return [];
+
+      seenPairs.add(pairKey);
+      return [{ suggestion, firstWord, secondWord, pairKey }];
+    });
+  }, [currentAcceptedMergeSuggestions, words]);
 
   return (
     <main className="sky-clean">
@@ -583,6 +648,49 @@ export default function SkyPanel() {
                 <span>{words.length}</span>
               </div>
 
+              {visibleAcceptedMergeSuggestions.length > 0 && (
+                <div className="accepted-merge-suggestions">
+                  {visibleAcceptedMergeSuggestions.map(({ firstWord, secondWord, pairKey }) => {
+                    const candidates = getAcceptedMergeCanonicalCandidates(firstWord, secondWord);
+                    const selectedCanonical = acceptedMergeCanonicalSelections[pairKey] ?? "";
+
+                    return (
+                      <article key={pairKey} className="ai-suggestion-row accepted-merge-suggestion">
+                        <span>
+                          IA sugere mesclar: <strong>{firstWord.text}</strong> ↔ <strong>{secondWord.text}</strong>
+                        </span>
+
+                        <select
+                          aria-label={`Escolher forma canônica para mesclar ${firstWord.text} e ${secondWord.text}`}
+                          value={selectedCanonical}
+                          onChange={(event) => {
+                            const candidate = event.target.value;
+                            setAcceptedMergeCanonicalSelections((current) => ({
+                              ...current,
+                              [pairKey]: candidate,
+                            }));
+                          }}
+                        >
+                          <option value="" disabled>Escolher forma canônica...</option>
+                          {candidates.map((candidate) => (
+                            <option key={candidate} value={candidate}>{candidate}</option>
+                          ))}
+                        </select>
+
+                        <button
+                          className="button"
+                          disabled={!selectedCanonical}
+                          onClick={() => handleMergeAcceptedWords(firstWord, secondWord, pairKey)}
+                          type="button"
+                        >
+                          Mesclar
+                        </button>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
+
               <div className="column-scroll-body accepted-clean-list">
                 {words.length === 0 ? (
                   <p className="clean-empty">Nenhuma palavra aceita ainda.</p>
@@ -643,7 +751,7 @@ export default function SkyPanel() {
           <button
             className="button ai-triage-action"
             onClick={handleAiAnalysis}
-            disabled={analysisState === "loading" || !selectedCloudId || newWords.length === 0}
+            disabled={analysisState === "loading" || !selectedCloudId || (newWords.length === 0 && words.length < 2)}
             type="button"
             title="Analisar ideias com IA"
           >
@@ -660,10 +768,7 @@ export default function SkyPanel() {
           ) : newWords.length === 0 ? (
             <p className="clean-empty">Nenhuma ideia pendente.</p>
           ) : (
-            displayPendingItems.map(({ word, attention, spellingSuggestion, mergeTargetId }) => {
-              const mergeTarget = mergeTargetId
-                ? words.find((acceptedWord) => acceptedWord.id === mergeTargetId) ?? null
-                : null;
+            displayPendingItems.map(({ word, attention, spellingSuggestion }) => {
               const hasSpellingSuggestion = isMeaningfullyDifferentSpelling(word.text, spellingSuggestion);
               const selectedSpelling = selectedSpellings[word.id];
 
@@ -704,15 +809,6 @@ export default function SkyPanel() {
                     <span>Grafia selecionada: <strong>{selectedSpelling}</strong></span>
                     <button className="button" onClick={() => handleClearSpelling(word.id)} type="button">
                       Cancelar
-                    </button>
-                  </div>
-                )}
-
-                {mergeTarget && (
-                  <div className="ai-suggestion-row">
-                    <span>IA sugere mesclar com: <strong>{mergeTarget.text}</strong></span>
-                    <button className="button" onClick={() => handleMerge(word, mergeTarget.id)} type="button">
-                      Mesclar sugestão
                     </button>
                   </div>
                 )}

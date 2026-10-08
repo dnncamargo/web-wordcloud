@@ -5,6 +5,7 @@ import {
   prepareOriginalApprovedWord,
 } from "@/lib/firebase/wordApproval";
 import { prepareCanonicalWordChange } from "@/lib/firebase/canonicalWord";
+import { prepareAcceptedWordMerge } from "@/lib/firebase/acceptedWordMerge";
 import { addDoc, collection, deleteDoc, doc, getDoc, increment, onSnapshot, runTransaction, serverTimestamp, setDoc, updateDoc } from "firebase/firestore";
 
 export type FirebaseCloud = {
@@ -430,6 +431,63 @@ export async function chooseCanonicalWordForm(
       aliases: decision.change.aliases,
       updatedAt: serverTimestamp(),
     });
+
+    return true;
+  });
+}
+
+export async function mergeAcceptedWords(
+  cloudId: string,
+  firstWordId: string,
+  secondWordId: string,
+  canonicalText: string,
+) {
+  const firstWordRef = doc(db, "clouds", cloudId, "words", firstWordId);
+  const secondWordRef = doc(db, "clouds", cloudId, "words", secondWordId);
+
+  return runTransaction(db, async (transaction) => {
+    const firstWordSnapshot = await transaction.get(firstWordRef);
+    const secondWordSnapshot = await transaction.get(secondWordRef);
+
+    if (
+      firstWordId === secondWordId ||
+      !firstWordSnapshot.exists() ||
+      !secondWordSnapshot.exists()
+    ) {
+      return false;
+    }
+
+    const firstWordData = firstWordSnapshot.data();
+    const secondWordData = secondWordSnapshot.data();
+    const decision = prepareAcceptedWordMerge(
+      {
+        id: firstWordSnapshot.id,
+        text: String(firstWordData.text ?? ""),
+        count: Number(firstWordData.count ?? 0),
+        aliases: Array.isArray(firstWordData.aliases)
+          ? firstWordData.aliases.map(String)
+          : [],
+      },
+      {
+        id: secondWordSnapshot.id,
+        text: String(secondWordData.text ?? ""),
+        count: Number(secondWordData.count ?? 0),
+        aliases: Array.isArray(secondWordData.aliases)
+          ? secondWordData.aliases.map(String)
+          : [],
+      },
+      canonicalText,
+    );
+
+    if (decision.kind !== "update") return false;
+
+    transaction.update(firstWordRef, {
+      text: decision.change.text,
+      count: decision.change.count,
+      aliases: decision.change.aliases,
+      updatedAt: serverTimestamp(),
+    });
+    transaction.delete(secondWordRef);
 
     return true;
   });

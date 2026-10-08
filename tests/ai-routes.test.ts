@@ -9,6 +9,7 @@ import { createAiTriagePost } from "../lib/ai/triage-route";
 import {
   OpenRouterTriageError,
   triagePendingWords,
+  type TriageResponse,
   type OpenRouterTriageFailureDiagnostic,
   type TriageResult,
 } from "../lib/ai/openRouterTriage";
@@ -23,7 +24,10 @@ const session: AiAdminSession = {
 
 const validTriageBody = {
   question: "Como cuidar melhor do ambiente?",
-  acceptedWords: [{ id: "accepted-1", text: "Plantar árvores" }],
+  acceptedWords: [
+    { id: "accepted-1", text: "Plantar árvores" },
+    { id: "accepted-2", text: "Cuidar da natureza" },
+  ],
   pendingWords: [{ id: "pending-1", text: "Reciclar" }],
 };
 
@@ -32,7 +36,11 @@ const triageResult: TriageResult = {
   relevance: 0.8,
   attention: false,
   spellingSuggestion: null,
-  mergeTargetId: "accepted-1",
+};
+
+const triageResponse: TriageResponse = {
+  results: [triageResult],
+  acceptedMergeSuggestions: [],
 };
 
 type CapturedTriageRequest = {
@@ -45,7 +53,15 @@ type CapturedTriageRequest = {
             items: {
               properties: {
                 id: { enum: string[] };
-                mergeTargetId: { enum: (string | null)[] };
+              };
+            };
+          };
+          acceptedMergeSuggestions: {
+            maxItems: number;
+            items: {
+              properties: {
+                firstId: { enum: string[] };
+                secondId: { enum: string[] };
               };
             };
           };
@@ -169,7 +185,7 @@ function createTriageHandler(options: {
     triagePendingWords: async () => {
       calls.provider += 1;
       if (options.triageError) throw options.triageError;
-      return [triageResult];
+      return triageResponse;
     },
     logFailure: (diagnostic) => {
       diagnostics.push(diagnostic);
@@ -422,13 +438,13 @@ test("invalid triage JSON/schema does not reach Redis or provider", async () => 
   }
 });
 
-test("empty pending triage returns [] without provider configuration or Redis", async () => {
+test("no pending and fewer than two accepted words returns empty work without provider", async () => {
   const { calls, handler } = createTriageHandler({ provider: false });
   const response = await handler(
-    triageRequest({ ...validTriageBody, pendingWords: [] }),
+    triageRequest({ ...validTriageBody, acceptedWords: validTriageBody.acceptedWords.slice(0, 1), pendingWords: [] }),
   );
   assert.equal(response.status, 200);
-  assert.deepEqual(await responseBody(response), []);
+  assert.deepEqual(await responseBody(response), { results: [], acceptedMergeSuggestions: [] });
   assert.equal(calls.providerCheck, 0);
   assert.equal(calls.guardrail, 0);
   assert.equal(calls.provider, 0);
@@ -458,7 +474,7 @@ test("allowed triage invokes the provider once and returns validated results", a
   const { calls, handler } = createTriageHandler();
   const response = await handler(triageRequest());
   assert.equal(response.status, 200);
-  assert.deepEqual(await responseBody(response), [triageResult]);
+  assert.deepEqual(await responseBody(response), triageResponse);
   assert.equal(calls.providerCheck, 1);
   assert.equal(calls.guardrail, 1);
   assert.equal(calls.provider, 1);
@@ -495,16 +511,15 @@ test("provider schema constrains pending and accepted ids", async () => {
           relevance: 0.8,
           attention: false,
           spellingSuggestion: null,
-          mergeTargetId: "accepted-1",
         },
         {
           id: "pending-2",
           relevance: 0.7,
           attention: false,
           spellingSuggestion: null,
-          mergeTargetId: null,
         },
       ],
+      acceptedMergeSuggestions: [{ firstId: "accepted-1", secondId: "accepted-2" }],
     }),
   );
 
@@ -514,14 +529,35 @@ test("provider schema constrains pending and accepted ids", async () => {
   assert.equal(response.status, 200);
   assert.equal(request.response_format.json_schema.strict, true);
   assert.deepEqual(itemSchema.properties.id.enum, ["pending-1", "pending-2"]);
-  assert.deepEqual(itemSchema.properties.mergeTargetId.enum, [
+  assert.deepEqual(request.response_format.json_schema.schema.properties.acceptedMergeSuggestions.items.properties.firstId.enum, [
     "accepted-1",
     "accepted-2",
-    null,
   ]);
+  assert.deepEqual(request.response_format.json_schema.schema.properties.acceptedMergeSuggestions.items.properties.secondId.enum, ["accepted-1", "accepted-2"]);
 });
 
-test("provider schema permits only null merge targets without accepted words", async () => {
+test("accepted-only triage invokes the provider when two accepted words exist", async () => {
+  const input = {
+    ...validTriageBody,
+    pendingWords: [],
+  };
+  const { response, diagnostics } = await runMockedProviderResponse(
+    input,
+    JSON.stringify({
+      results: [],
+      acceptedMergeSuggestions: [{ firstId: "accepted-1", secondId: "accepted-2" }],
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(diagnostics, []);
+  assert.deepEqual(await responseBody(response), {
+    results: [],
+    acceptedMergeSuggestions: [{ firstId: "accepted-1", secondId: "accepted-2" }],
+  });
+});
+
+test("provider schema avoids empty enums when there are no accepted words", async () => {
   const input = {
     question: "Como cuidar melhor do ambiente?",
     acceptedWords: [],
@@ -535,8 +571,8 @@ test("provider schema permits only null merge targets without accepted words", a
         relevance: 0.8,
         attention: false,
         spellingSuggestion: null,
-        mergeTargetId: null,
       }],
+      acceptedMergeSuggestions: [],
     }),
   );
 
@@ -544,33 +580,57 @@ test("provider schema permits only null merge targets without accepted words", a
   const itemSchema = request.response_format.json_schema.schema.properties.results.items;
 
   assert.equal(response.status, 200);
-  assert.deepEqual(itemSchema.properties.mergeTargetId.enum, [null]);
+  assert.equal(itemSchema.properties.id.enum[0], "pending-1");
+  assert.equal(request.response_format.json_schema.schema.properties.acceptedMergeSuggestions.maxItems, 0);
 });
 
-test("local validation still rejects an unknown merge target", async () => {
+test("local validation still rejects an unknown accepted merge id", async () => {
   const { diagnostics, response } = await runMockedProviderResponse(
     validTriageBody,
     JSON.stringify({
-      results: [{ ...triageResult, mergeTargetId: "unknown-merge-target" }],
+      results: [triageResult],
+      acceptedMergeSuggestions: [{ firstId: "accepted-1", secondId: "unknown-merge-target" }],
     }),
   );
 
   assert.equal(response.status, 503);
   assert.deepEqual(diagnostics, [{
     code: "provider_result_invalid",
-    validationReason: "merge_target_invalid",
+    validationReason: "accepted_merge_suggestion_invalid",
     finishReason: "stop",
   }]);
+});
+
+test("local validation rejects same-word and reversed duplicate accepted pairs", async () => {
+  for (const acceptedMergeSuggestions of [
+    [{ firstId: "accepted-1", secondId: "accepted-1" }],
+    [
+      { firstId: "accepted-1", secondId: "accepted-2" },
+      { firstId: "accepted-2", secondId: "accepted-1" },
+    ],
+  ]) {
+    const { diagnostics, response } = await runMockedProviderResponse(
+      validTriageBody,
+      JSON.stringify({ results: [triageResult], acceptedMergeSuggestions }),
+    );
+
+    assert.equal(response.status, 503);
+    assert.equal(diagnostics[0]?.code, "provider_result_invalid");
+    assert.ok(
+      diagnostics[0]?.validationReason === "accepted_merge_pair_same" ||
+      diagnostics[0]?.validationReason === "accepted_merge_pair_duplicate",
+    );
+  }
 });
 
 test("valid provider result still passes local validation", async () => {
   const { response } = await runMockedProviderResponse(
     validTriageBody,
-    JSON.stringify({ results: [triageResult] }),
+    JSON.stringify({ results: [triageResult], acceptedMergeSuggestions: [] }),
   );
 
   assert.equal(response.status, 200);
-  assert.deepEqual(await responseBody(response), [triageResult]);
+  assert.deepEqual(await responseBody(response), triageResponse);
 });
 
 test("provider result validation keeps 503 and emits a sanitized diagnostic", async () => {
@@ -631,14 +691,13 @@ test("provider result validation emits stable sanitized reasons", async () => {
     relevance: 0.5,
     attention: false,
     spellingSuggestion: providerContent,
-    mergeTargetId: null,
   };
   const cases = [
     {
       reason: "pending_id_invalid",
       input: {
         question,
-        acceptedWords: [{ id: acceptedId, text: inputText }],
+      acceptedWords: [{ id: acceptedId, text: inputText }, { id: "accepted-second", text: "second" }],
         pendingWords: [{ id: pendingId, text: inputText }],
       },
       results: [{ ...validResult, id: "unknown-sensitive-id" }],
@@ -647,7 +706,7 @@ test("provider result validation emits stable sanitized reasons", async () => {
       reason: "pending_id_duplicate",
       input: {
         question,
-        acceptedWords: [{ id: acceptedId, text: inputText }],
+        acceptedWords: [{ id: acceptedId, text: inputText }, { id: "accepted-second", text: "second" }],
         pendingWords: [
           { id: pendingId, text: inputText },
           { id: secondPendingId, text: inputText },
@@ -659,7 +718,7 @@ test("provider result validation emits stable sanitized reasons", async () => {
       reason: "relevance_invalid",
       input: {
         question,
-        acceptedWords: [{ id: acceptedId, text: inputText }],
+        acceptedWords: [{ id: acceptedId, text: inputText }, { id: "accepted-second", text: "second" }],
         pendingWords: [{ id: pendingId, text: inputText }],
       },
       results: [{ ...validResult, relevance: 2 }],
@@ -668,7 +727,7 @@ test("provider result validation emits stable sanitized reasons", async () => {
       reason: "attention_invalid",
       input: {
         question,
-        acceptedWords: [{ id: acceptedId, text: inputText }],
+        acceptedWords: [{ id: acceptedId, text: inputText }, { id: "accepted-second", text: "second" }],
         pendingWords: [{ id: pendingId, text: inputText }],
       },
       results: [{ ...validResult, attention: "false" }],
@@ -677,22 +736,22 @@ test("provider result validation emits stable sanitized reasons", async () => {
       reason: "spelling_suggestion_invalid",
       input: {
         question,
-        acceptedWords: [{ id: acceptedId, text: inputText }],
+        acceptedWords: [{ id: acceptedId, text: inputText }, { id: "accepted-second", text: "second" }],
         pendingWords: [{ id: pendingId, text: inputText }],
       },
       results: [{ ...validResult, spellingSuggestion: "   " }],
     },
     {
-      reason: "merge_target_invalid",
+      reason: "accepted_merge_suggestion_invalid",
       input: {
         question,
-        acceptedWords: [{ id: acceptedId, text: inputText }],
+        acceptedWords: [{ id: acceptedId, text: inputText }, { id: "accepted-second", text: "second" }],
         pendingWords: [{ id: pendingId, text: inputText }],
       },
       results: [{
         ...validResult,
-        mergeTargetId: "unknown-merge-target-sensitive-id",
       }],
+      acceptedMergeSuggestions: [{ firstId: acceptedId, secondId: "unknown-merge-target-sensitive-id" }],
     },
   ] as const;
   const allDiagnostics: OpenRouterTriageFailureDiagnostic[] = [];
@@ -700,7 +759,12 @@ test("provider result validation emits stable sanitized reasons", async () => {
   for (const testCase of cases) {
     const { diagnostics, response } = await runMockedProviderResponse(
       testCase.input,
-      JSON.stringify({ results: testCase.results }),
+      JSON.stringify({
+        results: testCase.results,
+        acceptedMergeSuggestions: "acceptedMergeSuggestions" in testCase
+          ? testCase.acceptedMergeSuggestions
+          : [],
+      }),
     );
 
     assert.equal(response.status, 503);

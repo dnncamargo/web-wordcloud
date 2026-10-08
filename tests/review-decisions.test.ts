@@ -11,6 +11,11 @@ import {
   getCanonicalWordCandidates,
   prepareCanonicalWordChange,
 } from "../lib/firebase/canonicalWord";
+import {
+  getAcceptedMergeCanonicalCandidates,
+  getAcceptedMergePairKey,
+  prepareAcceptedWordMerge,
+} from "../lib/firebase/acceptedWordMerge";
 
 test("choosing a spelling suggestion only changes ephemeral selection state", () => {
   assert.deepEqual(
@@ -114,4 +119,37 @@ test("selecting the current canonical form performs no change", () => {
     prepareCanonicalWordChange("Respeito", ["Respeito sempre"], "Respeito"),
     { kind: "noop" },
   );
+});
+
+test("accepted merge candidates combine both current forms and aliases", () => {
+  assert.deepEqual(
+    getAcceptedMergeCanonicalCandidates(
+      { text: "Escutar", aliases: ["Ouvir"] },
+      { text: "Escutar melhor", aliases: ["Ouvir", "Escutar"] },
+    ),
+    ["Escutar", "Ouvir", "Escutar melhor"],
+  );
+});
+
+test("accepted merge is explicit and prepares a count-preserving canonical choice", () => {
+  const first = { id: "word-1", text: "Escutar", count: 3, aliases: ["Ouvir"] };
+  const second = { id: "word-2", text: "Escutar melhor", count: 2, aliases: ["Ouvir"] };
+
+  assert.deepEqual(getAcceptedMergePairKey(first.id, second.id), getAcceptedMergePairKey(second.id, first.id));
+  assert.deepEqual(prepareAcceptedWordMerge(first, second, "Escutar melhor"), {
+    kind: "update",
+    change: {
+      text: "Escutar melhor",
+      count: 5,
+      aliases: ["Escutar", "Ouvir"],
+    },
+  });
+});
+
+test("stale accepted merge pair or canonical choice is rejected", () => {
+  const first = { id: "word-1", text: "Escutar", count: 1, aliases: [] };
+  const second = { id: "word-2", text: "Respeito", count: 1, aliases: [] };
+
+  assert.deepEqual(prepareAcceptedWordMerge(first, first, "Escutar"), { kind: "invalid" });
+  assert.deepEqual(prepareAcceptedWordMerge(first, second, "Escutar melhor"), { kind: "invalid" });
 });

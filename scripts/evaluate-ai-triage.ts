@@ -35,7 +35,6 @@ type EvaluationOptions = Readonly<{
 const EXPECTED_RESULT_KEYS = [
   "attention",
   "id",
-  "mergeTargetId",
   "relevance",
   "spellingSuggestion",
 ] as const;
@@ -78,7 +77,6 @@ const hardAssertions: Readonly<Record<string, readonly HardAssertion[]>> = {
         const p9 = result(results, "p9");
         return (
           p9.attention === false &&
-          p9.mergeTargetId === null &&
           p9.relevance < relevance(results, "p1") &&
           p9.relevance < relevance(results, "p3")
         );
@@ -116,16 +114,6 @@ const reviewExpectations: Readonly<Record<string, readonly ReviewExpectation[]>>
         formatNullable(result(results, "p6").spellingSuggestion),
     },
     {
-      label: "p7 merge",
-      expected: "A merge to a1 / ‘Plantar árvores’ may be reasonable.",
-      observe: (_, results) => formatNullable(result(results, "p7").mergeTargetId),
-    },
-    {
-      label: "p8 merge",
-      expected: "Use conservative merge behavior; record whether a merge is suggested.",
-      observe: (_, results) => formatNullable(result(results, "p8").mergeTargetId),
-    },
-    {
       label: "p3 creative response",
       expected: "Do not penalize the creative climate response merely for being less obvious.",
       observe: (_, results) => formatNumber(result(results, "p3").relevance),
@@ -139,11 +127,6 @@ const reviewExpectations: Readonly<Record<string, readonly ReviewExpectation[]>>
         formatNullable(result(results, "q6").spellingSuggestion),
     },
     {
-      label: "q6 merge",
-      expected: "A merge to b1 / ‘Ouvir os colegas’ may be reasonable.",
-      observe: (_, results) => formatNullable(result(results, "q6").mergeTargetId),
-    },
-    {
       label: "q5 informal language",
       expected: "Preserve informal/student language instead of unnecessary rewriting.",
       observe: (_, results) =>
@@ -151,31 +134,6 @@ const reviewExpectations: Readonly<Record<string, readonly ReviewExpectation[]>>
     },
   ],
   C: [
-    {
-      label: "r1 merge",
-      expected: "A merge to c1 / ‘Reduzir plástico’ may be reasonable.",
-      observe: (_, results) => formatNullable(result(results, "r1").mergeTargetId),
-    },
-    {
-      label: "r2 merge",
-      expected: "A merge to c2 / ‘Reutilizar materiais’ may be reasonable.",
-      observe: (_, results) => formatNullable(result(results, "r2").mergeTargetId),
-    },
-    {
-      label: "r3 broad meaning",
-      expected: "Test conservative merge behavior for a semantically broad response.",
-      observe: (_, results) => formatNullable(result(results, "r3").mergeTargetId),
-    },
-    {
-      label: "r4 unrelated positive response",
-      expected: "Do not merge merely because the idea is environmentally positive.",
-      observe: (_, results) => formatNullable(result(results, "r4").mergeTargetId),
-    },
-    {
-      label: "r5 weak equivalence",
-      expected: "Do not force a merge when semantic equivalence is weak.",
-      observe: (_, results) => formatNullable(result(results, "r5").mergeTargetId),
-    },
   ],
 };
 
@@ -263,8 +221,6 @@ function validateReturnedResults(
     return false;
   }
 
-  const acceptedIds = new Set(scenario.input.acceptedWords.map((word) => word.id));
-
   return results.every((item) => {
     const keys = Object.keys(item).sort();
     const expectedKeys = [...EXPECTED_RESULT_KEYS].sort();
@@ -280,8 +236,7 @@ function validateReturnedResults(
       typeof item.attention === "boolean" &&
       (item.spellingSuggestion === null ||
         (typeof item.spellingSuggestion === "string" &&
-          item.spellingSuggestion.trim().length > 0)) &&
-      (item.mergeTargetId === null || acceptedIds.has(item.mergeTargetId))
+          item.spellingSuggestion.trim().length > 0))
     );
   });
 }
@@ -327,7 +282,7 @@ function printResultTable(
 ): void {
   console.log(`\nSCENARIO ${scenario.id} — ${scenario.name}`);
   console.log(
-    "id | synthetic text | relevance | attention | spellingSuggestion | mergeTargetId",
+    "id | synthetic text | relevance | attention | spellingSuggestion",
   );
 
   for (const pendingWord of scenario.input.pendingWords) {
@@ -339,7 +294,6 @@ function printResultTable(
         formatNumber(item.relevance),
         String(item.attention),
         formatNullable(item.spellingSuggestion),
-        formatNullable(item.mergeTargetId),
       ].join(" | "),
     );
   }
@@ -372,7 +326,8 @@ async function runRealEvaluation(): Promise<void> {
 
   for (const scenario of evaluationScenarios) {
     openRouterCalls += 1;
-    const results = await triagePendingWords(scenario.input);
+    const response = await triagePendingWords(scenario.input);
+    const results = response.results;
 
     printResultTable(scenario, results);
 

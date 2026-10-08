@@ -8,6 +8,7 @@ import {
 export {
   MAX_BODY_BYTES,
   MAX_ACCEPTED_WORDS,
+  MAX_ACCEPTED_MERGE_SUGGESTIONS,
   MAX_COMBINED_WORDS,
   MAX_PENDING_WORDS,
   MAX_QUESTION_CODE_POINTS,
@@ -20,6 +21,7 @@ export {
 export type {
   TriageInput,
   TriageResult,
+  TriageResponse,
   TriageWord,
 } from "@/lib/ai/triage-contract";
 
