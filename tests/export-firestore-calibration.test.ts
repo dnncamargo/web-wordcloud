@@ -216,10 +216,30 @@ test("missing subcollections become empty arrays, malformed responses fail clear
 });
 
 test("transport issues GET requests only and never emits credentials", async () => {
-  const queued = queuedFetch([response({ documents: [] })]);
+  const queued = queuedFetch([
+    response({
+      name: "projects/p/databases/(default)/documents/clouds/c1",
+      fields: {
+        title: stringValue("C"),
+        publicTitle: stringValue("P"),
+        status: stringValue("draft"),
+      },
+    }),
+    response({ documents: [] }),
+  ]);
   const client = createFirestoreRestClient("project-secret-example", "api-key-secret-example", queued.fetchImplementation);
+  await client.getCloud("c1");
   await client.listDocuments(["clouds"]);
-  assert.deepEqual(queued.calls.map((call) => call.method), ["GET"]);
+  assert.deepEqual(queued.calls.map((call) => call.method), ["GET", "GET"]);
+
+  const documentUrl = new URL(queued.calls[0]?.url ?? "https://example.test");
+  assert.equal(documentUrl.searchParams.has("pageSize"), false);
+  assert.equal(documentUrl.searchParams.has("pageToken"), false);
+
+  const firstCollectionUrl = new URL(queued.calls[1]?.url ?? "https://example.test");
+  assert.equal(firstCollectionUrl.searchParams.get("pageSize"), "1000");
+  assert.equal(firstCollectionUrl.searchParams.has("pageToken"), false);
+  assert.ok(queued.calls.every((call) => call.method === "GET"));
 
   const output = serializeCalibrationExport({ schemaVersion: 1, clouds: [] }, credentialValues);
   assert.doesNotMatch(output, /project-secret-example|api-key-secret-example/);

@@ -338,16 +338,25 @@ export function parseCliArgs(args: readonly string[]): CliOptions {
   return outPath === undefined ? { mode, cloudId } : { mode, cloudId, outPath };
 }
 
-function firestoreUrl(
+function firestoreDocumentUrl(
   projectId: string,
   apiKey: string,
   path: readonly string[],
-  pageToken?: string,
 ): string {
   const url = new URL(
     `${FIRESTORE_BASE_URL}/projects/${encodeURIComponent(projectId)}/databases/(default)/documents/${path.map(encodeURIComponent).join("/")}`,
   );
   url.searchParams.set("key", apiKey);
+  return url.toString();
+}
+
+function firestoreCollectionUrl(
+  projectId: string,
+  apiKey: string,
+  path: readonly string[],
+  pageToken?: string,
+): string {
+  const url = new URL(firestoreDocumentUrl(projectId, apiKey, path));
   url.searchParams.set("pageSize", String(PAGE_SIZE));
   if (pageToken) url.searchParams.set("pageToken", pageToken);
   return url.toString();
@@ -358,14 +367,11 @@ export function createFirestoreRestClient(
   apiKey: string,
   fetchImplementation: FetchImplementation = fetch as unknown as FetchImplementation,
 ) {
-  async function getJson(
-    path: readonly string[],
-    pageToken?: string,
-  ): Promise<unknown> {
+  async function getJson(url: string): Promise<unknown> {
     let response: Pick<Response, "ok" | "status" | "json">;
     try {
       response = await fetchImplementation(
-        firestoreUrl(projectId, apiKey, path, pageToken),
+        url,
         { method: "GET", cache: "no-store" },
       );
     } catch {
@@ -383,7 +389,7 @@ export function createFirestoreRestClient(
 
   return {
     async getCloud(cloudId: string): Promise<CalibrationCloud> {
-      const value = await getJson(["clouds", cloudId]);
+      const value = await getJson(firestoreDocumentUrl(projectId, apiKey, ["clouds", cloudId]));
       return parseCloudDocument(value, cloudId);
     },
 
@@ -397,7 +403,7 @@ export function createFirestoreRestClient(
       do {
         let value: unknown;
         try {
-          value = await getJson(path, pageToken);
+          value = await getJson(firestoreCollectionUrl(projectId, apiKey, path, pageToken));
         } catch (error) {
           if (options.missingIsEmpty && error instanceof FirestoreHttpError && error.status === 404) {
             return [];
