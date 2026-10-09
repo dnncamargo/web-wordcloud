@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   evaluateAcceptedMerges,
   evaluateSpelling,
+  classifyStructuralFailure,
   parseCalibration,
   selectedCalibrations,
   spellingSuggestionMatches,
@@ -137,6 +138,7 @@ test("structural recovery counters separate clean, recovered, and rejected respo
     discardedSelfPairs: 0,
     discardedDuplicatePairs: 0,
     responsesRejected: 0,
+    attemptsFailed: 0,
   });
   assert.equal(selfPair.responsesClean, 0);
   assert.equal(selfPair.responsesRecovered, 1);
@@ -152,16 +154,67 @@ test("structural recovery counters separate clean, recovered, and rejected respo
     discardedSelfPairs: 0,
     discardedDuplicatePairs: 0,
     responsesRejected: 1,
+    attemptsFailed: 0,
   });
 
-  const attempted = [clean, both, rejected];
+  const failedAttempt = structuralRecoveryCounters("attempt_failed");
+  assert.deepEqual(failedAttempt, {
+    responsesClean: 0,
+    responsesRecovered: 0,
+    discardedSelfPairs: 0,
+    discardedDuplicatePairs: 0,
+    responsesRejected: 0,
+    attemptsFailed: 1,
+  });
+
+  assert.equal(
+    classifyStructuralFailure({
+      code: "provider_result_invalid",
+      validationReason: "relevance_invalid",
+    }),
+    "rejected",
+  );
+  assert.equal(
+    classifyStructuralFailure({ code: "provider_result_incomplete" }),
+    "rejected",
+  );
+  assert.equal(
+    classifyStructuralFailure({ code: "provider_structured_json_invalid" }),
+    "rejected",
+  );
+  assert.equal(
+    classifyStructuralFailure({ code: "provider_http_error", providerStatus: 429 }),
+    "attempt_failed",
+  );
+  assert.equal(
+    classifyStructuralFailure({ code: "provider_http_error", providerStatus: 503 }),
+    "attempt_failed",
+  );
+  assert.equal(
+    classifyStructuralFailure({ code: "provider_invalid_json" }),
+    "attempt_failed",
+  );
+  assert.equal(
+    classifyStructuralFailure({ code: "provider_missing_content" }),
+    "attempt_failed",
+  );
+  assert.equal(
+    classifyStructuralFailure({ code: "provider_unknown_failure" }),
+    "attempt_failed",
+  );
+
+  const attempted = [clean, both, rejected, failedAttempt];
   assert.equal(
     attempted.reduce(
       (total, counters) =>
-        total + counters.responsesClean + counters.responsesRecovered + counters.responsesRejected,
+        total +
+        counters.responsesClean +
+        counters.responsesRecovered +
+        counters.responsesRejected +
+        counters.attemptsFailed,
       0,
     ),
-    3,
+    4,
   );
   assert.equal(JSON.stringify(both).includes("student"), false);
   assert.equal(JSON.stringify(both).includes("payload"), false);

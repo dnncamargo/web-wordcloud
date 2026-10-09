@@ -2,6 +2,7 @@ import {
   getOpenRouterTriageFailureDiagnostic,
   OPENROUTER_TRIAGE_REQUEST_OPTIONS,
   triagePendingWords,
+  type OpenRouterTriageFailureDiagnostic,
   triagePendingWordsForEvaluator,
 } from "../lib/ai/openRouterTriage";
 import { getOpenRouterModel } from "../lib/ai/openRouterConfig";
@@ -61,7 +62,14 @@ export type StructuralRecoveryCounters = Readonly<{
   discardedSelfPairs: number;
   discardedDuplicatePairs: number;
   responsesRejected: number;
+  attemptsFailed: number;
 }>;
+
+type StructuralResponseDisposition =
+  | "clean"
+  | "recovered"
+  | "rejected"
+  | "attempt_failed";
 
 const ZERO_NORMALIZATION_DIAGNOSTICS: NormalizationDiagnostics = {
   discardedSelfPairs: 0,
@@ -74,14 +82,19 @@ const ZERO_STRUCTURAL_RECOVERY_COUNTERS: StructuralRecoveryCounters = {
   discardedSelfPairs: 0,
   discardedDuplicatePairs: 0,
   responsesRejected: 0,
+  attemptsFailed: 0,
 };
 
 export function structuralRecoveryCounters(
-  disposition: "clean" | "recovered" | "rejected",
+  disposition: StructuralResponseDisposition,
   diagnostics: NormalizationDiagnostics = ZERO_NORMALIZATION_DIAGNOSTICS,
 ): StructuralRecoveryCounters {
   if (disposition === "rejected") {
     return { ...ZERO_STRUCTURAL_RECOVERY_COUNTERS, responsesRejected: 1 };
+  }
+
+  if (disposition === "attempt_failed") {
+    return { ...ZERO_STRUCTURAL_RECOVERY_COUNTERS, attemptsFailed: 1 };
   }
 
   const hasDiscardedPairs =
@@ -108,7 +121,21 @@ function addStructuralRecoveryCounters(
     discardedDuplicatePairs:
       target.discardedDuplicatePairs + source.discardedDuplicatePairs,
     responsesRejected: target.responsesRejected + source.responsesRejected,
+    attemptsFailed: target.attemptsFailed + source.attemptsFailed,
   };
+}
+
+export function classifyStructuralFailure(
+  diagnostic: OpenRouterTriageFailureDiagnostic,
+): "rejected" | "attempt_failed" {
+  switch (diagnostic.code) {
+    case "provider_result_invalid":
+    case "provider_result_incomplete":
+    case "provider_structured_json_invalid":
+      return "rejected";
+    default:
+      return "attempt_failed";
+  }
 }
 
 const CALIBRATIONS: readonly CalibrationSpec[] = [
@@ -763,13 +790,25 @@ function printTotals(
       `discarded_duplicate_pairs=${structuralRecovery.discardedDuplicatePairs}`,
     );
     console.log(`responses_rejected=${structuralRecovery.responsesRejected}`);
+    console.log(`attempts_failed=${structuralRecovery.attemptsFailed}`);
     console.log(`responses_attempted=${openRouterCalls}`);
+    const responsesAccounted =
+      structuralRecovery.responsesClean +
+      structuralRecovery.responsesRecovered +
+      structuralRecovery.responsesRejected +
+      structuralRecovery.attemptsFailed;
+    console.log(`responses_accounted=${responsesAccounted}`);
+    console.log(
+      `response_count_identity=${responsesAccounted === openRouterCalls ? "PASS" : "FAIL"}`,
+    );
     console.log(
       `strict_structural_compliance=${
-        structuralRecovery.responsesRecovered === 0 &&
-        structuralRecovery.responsesRejected === 0
-          ? "PASS"
-          : "FAIL"
+        structuralRecovery.attemptsFailed > 0
+          ? "INCOMPLETE"
+          : structuralRecovery.responsesRecovered === 0 &&
+              structuralRecovery.responsesRejected === 0
+            ? "PASS"
+            : "FAIL"
       }`,
     );
     console.log("pedagogical_metrics_source=responses_after_normalization");
@@ -864,13 +903,14 @@ async function runCalibration(calibration: CalibrationSpec): Promise<boolean> {
         schemaFailures += 1;
       }
       if (calibration.id === "D") {
-        const responseCounters = structuralRecoveryCounters("rejected");
+        const disposition = classifyStructuralFailure(diagnostic);
+        const responseCounters = structuralRecoveryCounters(disposition);
         structuralRecovery = addStructuralRecoveryCounters(
           structuralRecovery,
           responseCounters,
         );
         console.log(
-          "structural_response=rejected responses_clean=0 responses_recovered=0 discarded_self_pairs=0 discarded_duplicate_pairs=0 responses_rejected=1",
+          `structural_response=${disposition} responses_clean=0 responses_recovered=0 discarded_self_pairs=0 discarded_duplicate_pairs=0 responses_rejected=${responseCounters.responsesRejected} attempts_failed=${responseCounters.attemptsFailed}`,
         );
       }
       console.log(
