@@ -14,6 +14,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { CALIBRATION_B_INSTRUCTION } from "./ai-calibration-b";
 import { CALIBRATION_C_INSTRUCTION } from "./ai-calibration-c";
+import { CALIBRATION_D_INSTRUCTION } from "./ai-calibration-d";
 import {
   EVALUATION_FIXTURE_VERSION,
   evaluationScenarios,
@@ -21,7 +22,7 @@ import {
   type EvaluationScenario,
 } from "./ai-triage-fixtures-v3";
 
-type CalibrationId = "A" | "B" | "C";
+type CalibrationId = "A" | "B" | "C" | "D";
 type CalibrationSelection = CalibrationId | "both" | "all";
 
 type EvaluationOptions = Readonly<{
@@ -68,6 +69,11 @@ const CALIBRATIONS: readonly CalibrationSpec[] = [
     id: "C",
     label: "Calibration C (experiment-only)",
     instructionSource: "scripts/ai-calibration-c.ts",
+  },
+  {
+    id: "D",
+    label: "Calibration D (experiment-only)",
+    instructionSource: "scripts/ai-calibration-d.ts",
   },
 ];
 
@@ -417,6 +423,7 @@ export function parseCalibration(value: string): CalibrationSelection {
     normalized === "A" ||
     normalized === "B" ||
     normalized === "C" ||
+    normalized === "D" ||
     normalized === "BOTH" ||
     normalized === "ALL"
   ) {
@@ -427,7 +434,7 @@ export function parseCalibration(value: string): CalibrationSelection {
         : normalized;
   }
 
-  throw new Error("Calibration must be A, B, C, both, or all.");
+  throw new Error("Calibration must be A, B, C, D, both, or all.");
 }
 
 function parseOptions(): EvaluationOptions {
@@ -482,7 +489,11 @@ function parseOptions(): EvaluationOptions {
 export function selectedCalibrations(
   selection: CalibrationSelection,
 ): readonly CalibrationSpec[] {
-  if (selection === "all") return CALIBRATIONS;
+  if (selection === "all") {
+    return CALIBRATIONS.filter(
+      (calibration) => calibration.id === "A" || calibration.id === "B" || calibration.id === "C",
+    );
+  }
   if (selection === "both") {
     return CALIBRATIONS.filter((calibration) => calibration.id === "A" || calibration.id === "B");
   }
@@ -712,7 +723,9 @@ async function runCalibration(calibration: CalibrationSpec): Promise<boolean> {
               scenario.input,
               calibration.id === "B"
                 ? CALIBRATION_B_INSTRUCTION
-                : CALIBRATION_C_INSTRUCTION,
+                : calibration.id === "C"
+                  ? CALIBRATION_C_INSTRUCTION
+                  : CALIBRATION_D_INSTRUCTION,
             );
       const metrics = evaluateScenario(scenario, response);
 

@@ -106,10 +106,12 @@ test("calibration selection preserves both as A+B and all as A+B+C", () => {
   assert.equal(parseCalibration("A"), "A");
   assert.equal(parseCalibration("B"), "B");
   assert.equal(parseCalibration("C"), "C");
+  assert.equal(parseCalibration("D"), "D");
   assert.equal(parseCalibration("both"), "both");
   assert.equal(parseCalibration("all"), "all");
   assert.deepEqual(selectedCalibrations("both").map(({ id }) => id), ["A", "B"]);
   assert.deepEqual(selectedCalibrations("all").map(({ id }) => id), ["A", "B", "C"]);
+  assert.deepEqual(selectedCalibrations("D").map(({ id }) => id), ["D"]);
 });
 
 test("fixture v3 uses an unambiguous braille pair and rejects Mais livros overlap", () => {
@@ -175,4 +177,9 @@ test("dry-run reports selected calibrations, maximum calls, and zero actual call
   assert.match(allOutput, /selected_calibrations=A,B,C/);
   assert.match(allOutput, /max_openrouter_calls=12/);
   assert.match(allOutput, /openrouter_calls=0/);
+
+  const dOutput = runDryRun("D");
+  assert.match(dOutput, /selected_calibrations=D/);
+  assert.match(dOutput, /max_openrouter_calls=4/);
+  assert.match(dOutput, /openrouter_calls=0/);
 });
