@@ -2,16 +2,19 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   AUTHORIZED_CALIBRATION_CLOUD_COUNT,
+  consolidateAnnotationRecords,
   evaluateSemanticMergePredictions,
   importCalibrationCorpus,
   loadCalibrationExport,
   parseCalibrationExport,
+  selectSemanticMergeAnnotationQueue,
   semanticMergePairIdentity,
   summarizeAnnotationCoverage,
   validateHistoricalModerationCase,
   validateSemanticMergeCase,
   type AcceptedMergeBenchmarkCase,
   type BenchmarkIdea,
+  type SemanticAnnotationRecord,
 } from "../scripts/semantic-merge-benchmark";
 
 function idea(
@@ -28,9 +31,11 @@ function benchmarkCase(
   confidence: AcceptedMergeBenchmarkCase["confidence"],
   adjudicationStatus: AcceptedMergeBenchmarkCase["adjudicationStatus"],
   cloudPseudonym = `${caseId}-cloud`,
+  firstText = "first synthetic idea",
+  secondText = "second synthetic idea",
 ): AcceptedMergeBenchmarkCase {
-  const first = idea("accepted_word", `${caseId}-a`, "first synthetic idea");
-  const second = idea("accepted_word", `${caseId}-b`, "second synthetic idea");
+  const first = idea("accepted_word", `${caseId}-a`, firstText);
+  const second = idea("accepted_word", `${caseId}-b`, secondText);
 
   return {
     benchmarkVersion: "semantic-merge-v1",
@@ -237,6 +242,46 @@ test("annotation coverage excludes uncertain and unjudged cases", () => {
   });
 });
 
+function annotationRecord(overrides: Partial<SemanticAnnotationRecord> = {}): SemanticAnnotationRecord {
+  return {
+    benchmarkVersion: "semantic-merge-v1",
+    caseId: "case-1",
+    pairIdentity: "pair-1",
+    humanLabel: "equivalent",
+    confidence: "high",
+    administrativeDecision: "not_recorded",
+    adjudicationStatus: "adjudicated",
+    ...overrides,
+  };
+}
+
+test("consolidates identical annotations and rejects contradictory duplicates", () => {
+  const record = annotationRecord();
+  assert.deepEqual(consolidateAnnotationRecords([record, { ...record }]), [record]);
+  assert.throws(
+    () => consolidateAnnotationRecords([record, { ...record, humanLabel: "uncertain", confidence: "medium" }]),
+    /Conflicting annotations require human resolution/,
+  );
+  assert.throws(
+    () => consolidateAnnotationRecords([record, { ...record, administrativeDecision: "merge" }]),
+    /Conflicting annotations require human resolution/,
+  );
+});
+
+test("selects a reproducible, same-cloud lexical-stratified queue", () => {
+  const cases = [
+    benchmarkCase("high", null, null, "unadjudicated", "cloud-a", "school access", "access to school"),
+    benchmarkCase("medium", null, null, "unadjudicated", "cloud-a", "public transport", "transport in the city"),
+    benchmarkCase("low", null, null, "unadjudicated", "cloud-b", "school access", "purple bicycles"),
+  ];
+  const first = selectSemanticMergeAnnotationQueue(cases, 3);
+  const second = selectSemanticMergeAnnotationQueue(cases, 3);
+  assert.deepEqual(first, second);
+  assert.equal(first.selectedCount, 3);
+  assert.equal(first.items.every((item) => item.cloudPseudonym === "cloud-a" || item.cloudPseudonym === "cloud-b"), true);
+  assert.equal(first.selectionCriteria.some((item) => item.includes("never a semantic label")), true);
+});
+
 test("imports the authorized real corpus offline when a path is provided", async (context) => {
   const corpusPath = process.env.SEMANTIC_MERGE_CORPUS_PATH;
   if (!corpusPath) {
@@ -273,4 +318,9 @@ test("imports the authorized real corpus offline when a path is provided", async
     ),
     true,
   );
+  const queue = selectSemanticMergeAnnotationQueue(imported.acceptedMergeBenchmarkCases, 60);
+  assert.equal(queue.selectedCount, 60);
+  assert.equal(queue.candidateCount, 3205);
+  assert.equal(Object.keys(queue.cloudCounts).length, 9);
+  assert.deepEqual(queue, selectSemanticMergeAnnotationQueue(imported.acceptedMergeBenchmarkCases, 60));
 });

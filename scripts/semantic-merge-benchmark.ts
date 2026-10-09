@@ -9,6 +9,8 @@ import type {
 
 export const SEMANTIC_MERGE_BENCHMARK_VERSION = "semantic-merge-v1" as const;
 export const AUTHORIZED_CALIBRATION_CLOUD_COUNT = 12;
+export const AUTHORIZED_CALIBRATION_EXPORT_SHA256 =
+  "ab2b5979f6dcf028899e630746dd03c82d824e669defbb96bbc80881e0cc4d2a";
 
 export type SemanticMergeLabel =
   | "equivalent"
@@ -155,6 +157,55 @@ export type SemanticMergeBenchmarkReport = SemanticMergeMetric &
     macro: SemanticMergeMacroMetric;
     perCloud: readonly SemanticMergeCloudReport[];
   }>;
+
+export type LexicalSimilarityTier = "high" | "medium" | "low";
+
+export type SemanticAnnotationRecord = Readonly<{
+  benchmarkVersion: typeof SEMANTIC_MERGE_BENCHMARK_VERSION;
+  caseId: string;
+  pairIdentity: string;
+  humanLabel: SemanticMergeLabel | null;
+  confidence: AnnotationConfidence | null;
+  administrativeDecision: AdministrativeDecision;
+  adjudicationStatus: Exclude<AdjudicationStatus, "not_applicable">;
+}>;
+
+export type SemanticMergeQueueItem = Readonly<{
+  caseId: string;
+  cloudPseudonym: string;
+  lexicalSimilarity: number;
+  lexicalTier: LexicalSimilarityTier;
+}>;
+
+export type SemanticMergeAnnotationQueue = Readonly<{
+  benchmarkVersion: typeof SEMANTIC_MERGE_BENCHMARK_VERSION;
+  selectionVersion: "lexical-stratified-v1";
+  targetCount: number;
+  candidateCount: number;
+  selectedCount: number;
+  selectionCriteria: readonly string[];
+  tierCounts: Readonly<Record<LexicalSimilarityTier, number>>;
+  cloudCounts: Readonly<Record<string, number>>;
+  items: readonly SemanticMergeQueueItem[];
+}>;
+
+const ANNOTATION_RECORD_KEYS = [
+  "benchmarkVersion",
+  "caseId",
+  "pairIdentity",
+  "humanLabel",
+  "confidence",
+  "administrativeDecision",
+  "adjudicationStatus",
+] as const;
+
+const QUEUE_SELECTION_CRITERIA = [
+  "Only accepted_word ↔ accepted_word cases from one cloud are eligible.",
+  "Candidates are scored deterministically with lexical token and character-trigram overlap only.",
+  "High, medium, and low lexical tiers are sampled per cloud before round-robin completion.",
+  "Lexical similarity is a sampling signal, never a semantic label.",
+  "Case IDs and cloud pseudonyms are the only identifiers exposed in the queue.",
+] as const;
 
 const LABELS = new Set<SemanticMergeLabel>([
   "equivalent",
@@ -364,6 +415,14 @@ export async function loadCalibrationExport(
     throw new SemanticMergeBenchmarkError("Unable to read the calibration export.");
   }
   try {
+    if (
+      options.enforceAuthorizedScope !== false &&
+      createHash("sha256").update(text).digest("hex") !== AUTHORIZED_CALIBRATION_EXPORT_SHA256
+    ) {
+      throw new SemanticMergeBenchmarkError(
+        "Calibration export does not match the authorized calibration partition.",
+      );
+    }
     const exportData = parseCalibrationExport(JSON.parse(text));
     enforceAuthorizedScope(exportData, options);
     return exportData;
@@ -926,5 +985,192 @@ export function summarizeAnnotationCoverage(
     metricsConditionalOnJudgedUniverse: true,
     duplicateCaseIds: report.duplicateCaseIds,
     duplicatePairCases: report.duplicatePairCases,
+  };
+}
+
+function annotationRecordKey(record: SemanticAnnotationRecord): string {
+  return JSON.stringify([
+    record.benchmarkVersion,
+    record.caseId,
+    record.pairIdentity,
+    record.humanLabel,
+    record.confidence,
+    record.administrativeDecision,
+    record.adjudicationStatus,
+  ]);
+}
+
+function validateAnnotationRecord(record: SemanticAnnotationRecord): void {
+  const candidate = record as unknown as Record<string, unknown>;
+  requireExactKeys(candidate, ANNOTATION_RECORD_KEYS, "Annotation record");
+  if (record.benchmarkVersion !== SEMANTIC_MERGE_BENCHMARK_VERSION) {
+    throw new SemanticMergeBenchmarkError("Annotation benchmark version is incompatible.");
+  }
+  requireNonEmptyString(record.caseId, "Annotation caseId");
+  requireNonEmptyString(record.pairIdentity, "Annotation pairIdentity");
+  if (record.humanLabel !== null && !LABELS.has(record.humanLabel)) {
+    throw new SemanticMergeBenchmarkError("Annotation human label is invalid.");
+  }
+  if (record.confidence !== null && !CONFIDENCES.has(record.confidence)) {
+    throw new SemanticMergeBenchmarkError("Annotation confidence is invalid.");
+  }
+  if (!ADMINISTRATIVE_DECISIONS.has(record.administrativeDecision)) {
+    throw new SemanticMergeBenchmarkError("Annotation administrative decision is invalid.");
+  }
+  if (!ADJUDICATION_STATUSES.has(record.adjudicationStatus)) {
+    throw new SemanticMergeBenchmarkError("Annotation adjudication status is invalid.");
+  }
+  if ((record.humanLabel === null) !== (record.confidence === null)) {
+    throw new SemanticMergeBenchmarkError(
+      "Annotation human label and confidence must be provided together.",
+    );
+  }
+}
+
+export function consolidateAnnotationRecords(
+  records: readonly SemanticAnnotationRecord[],
+): readonly SemanticAnnotationRecord[] {
+  const byCaseId = new Map<string, SemanticAnnotationRecord>();
+  for (const record of records) {
+    validateAnnotationRecord(record);
+    const existing = byCaseId.get(record.caseId);
+    if (!existing) {
+      byCaseId.set(record.caseId, record);
+      continue;
+    }
+    if (annotationRecordKey(existing) !== annotationRecordKey(record)) {
+      throw new SemanticMergeBenchmarkError(
+        `Conflicting annotations require human resolution for case ${record.caseId}.`,
+      );
+    }
+  }
+  return [...byCaseId.values()].sort((first, second) =>
+    first.caseId.localeCompare(second.caseId),
+  );
+}
+
+function lexicalTokens(text: string): readonly string[] {
+  return text.toLocaleLowerCase("pt-BR").match(/[\p{L}\p{N}]+/gu) ?? [];
+}
+
+function characterTrigrams(text: string): readonly string[] {
+  const normalized = text.toLocaleLowerCase("pt-BR").replace(/\s+/gu, " ").trim();
+  if (normalized.length < 3) return normalized.length === 0 ? [] : [normalized];
+  const result: string[] = [];
+  for (let index = 0; index <= normalized.length - 3; index += 1) {
+    result.push(normalized.slice(index, index + 3));
+  }
+  return result;
+}
+
+function jaccard(first: readonly string[], second: readonly string[]): number {
+  const firstSet = new Set(first);
+  const secondSet = new Set(second);
+  if (firstSet.size === 0 && secondSet.size === 0) return 1;
+  if (firstSet.size === 0 || secondSet.size === 0) return 0;
+  let intersection = 0;
+  for (const value of firstSet) if (secondSet.has(value)) intersection += 1;
+  return intersection / new Set([...firstSet, ...secondSet]).size;
+}
+
+function lexicalSimilarity(first: string, second: string): number {
+  return (
+    jaccard(lexicalTokens(first), lexicalTokens(second)) +
+    jaccard(characterTrigrams(first), characterTrigrams(second))
+  ) / 2;
+}
+
+function lexicalTier(score: number): LexicalSimilarityTier {
+  if (score >= 0.55) return "high";
+  if (score >= 0.25) return "medium";
+  return "low";
+}
+
+const TIER_ORDER: readonly LexicalSimilarityTier[] = ["high", "medium", "low"];
+
+export function selectSemanticMergeAnnotationQueue(
+  benchmarkCases: readonly AcceptedMergeBenchmarkCase[],
+  targetCount = 60,
+): SemanticMergeAnnotationQueue {
+  if (!Number.isInteger(targetCount) || targetCount < 0) {
+    throw new SemanticMergeBenchmarkError("Queue target count must be a non-negative integer.");
+  }
+  const candidates = benchmarkCases.map((benchmarkCase) => {
+    validateSemanticMergeCase(benchmarkCase);
+    const score = lexicalSimilarity(
+      benchmarkCase.pair.first.text,
+      benchmarkCase.pair.second.text,
+    );
+    return {
+      caseId: benchmarkCase.caseId,
+      cloudPseudonym: benchmarkCase.source.cloudPseudonym,
+      lexicalSimilarity: score,
+      lexicalTier: lexicalTier(score),
+      benchmarkCase,
+    };
+  });
+  const byCloud = new Map<string, typeof candidates>();
+  for (const candidate of candidates) {
+    const cloudCandidates = byCloud.get(candidate.cloudPseudonym) ?? [];
+    cloudCandidates.push(candidate);
+    byCloud.set(candidate.cloudPseudonym, cloudCandidates);
+  }
+  const compareCandidates = (first: (typeof candidates)[number], second: (typeof candidates)[number]) =>
+    second.lexicalSimilarity - first.lexicalSimilarity || first.caseId.localeCompare(second.caseId);
+  const tieredByCloud = new Map<string, Record<LexicalSimilarityTier, typeof candidates>>();
+  for (const [cloud, cloudCandidates] of byCloud) {
+    const tiers: Record<LexicalSimilarityTier, typeof candidates> = { high: [], medium: [], low: [] };
+    for (const candidate of cloudCandidates) tiers[candidate.lexicalTier].push(candidate);
+    for (const tier of TIER_ORDER) tiers[tier].sort(compareCandidates);
+    tieredByCloud.set(cloud, tiers);
+  }
+  const clouds = [...tieredByCloud.keys()].sort((first, second) => first.localeCompare(second));
+  const selected = new Map<string, (typeof candidates)[number]>();
+  for (const tier of TIER_ORDER) {
+    for (const cloud of clouds) {
+      const candidate = tieredByCloud.get(cloud)![tier].find((item) => !selected.has(item.caseId));
+      if (candidate && selected.size < targetCount) selected.set(candidate.caseId, candidate);
+    }
+  }
+  let round = 0;
+  while (selected.size < Math.min(targetCount, candidates.length)) {
+    let available = false;
+    for (const cloud of clouds) {
+      const cloudCandidates = tieredByCloud.get(cloud)!;
+      const ordered = TIER_ORDER.flatMap((tier) => cloudCandidates[tier]);
+      const candidate = ordered[round];
+      if (candidate) available = true;
+      if (candidate && !selected.has(candidate.caseId)) {
+        selected.set(candidate.caseId, candidate);
+        if (selected.size >= targetCount) break;
+      }
+    }
+    if (!available) break;
+    round += 1;
+  }
+  const items = [...selected.values()]
+    .sort((first, second) => first.caseId.localeCompare(second.caseId))
+    .map(({ caseId, cloudPseudonym, lexicalSimilarity: score, lexicalTier: tier }) => ({
+      caseId,
+      cloudPseudonym,
+      lexicalSimilarity: score,
+      lexicalTier: tier,
+    }));
+  const tierCounts: Record<LexicalSimilarityTier, number> = { high: 0, medium: 0, low: 0 };
+  const cloudCounts: Record<string, number> = {};
+  for (const item of items) {
+    tierCounts[item.lexicalTier] += 1;
+    cloudCounts[item.cloudPseudonym] = (cloudCounts[item.cloudPseudonym] ?? 0) + 1;
+  }
+  return {
+    benchmarkVersion: SEMANTIC_MERGE_BENCHMARK_VERSION,
+    selectionVersion: "lexical-stratified-v1",
+    targetCount,
+    candidateCount: candidates.length,
+    selectedCount: items.length,
+    selectionCriteria: QUEUE_SELECTION_CRITERIA,
+    tierCounts,
+    cloudCounts,
+    items,
   };
 }
