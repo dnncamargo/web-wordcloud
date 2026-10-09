@@ -85,6 +85,23 @@ test("discards duplicate pairs in the same and reversed order", () => {
   }
 });
 
+test("keeps distinct pairs whose ids collided with the old separator key", () => {
+  const normalized = normalizeExperimentalTriageResponse(
+    response([
+      { firstId: "a\u0000b", secondId: "c" },
+      { firstId: "a", secondId: "b\u0000c" },
+    ]),
+    pendingIds,
+    ["a\u0000b", "c", "a", "b\u0000c"],
+  );
+
+  assert.equal(normalized.ok, true);
+  if (normalized.ok) {
+    assert.equal(normalized.response.acceptedMergeSuggestions.length, 2);
+    assert.equal(normalized.diagnostics.discardedDuplicatePairs, 0);
+  }
+});
+
 test("discards self-pairs while preserving valid pairs", () => {
   const normalized = normalizeExperimentalTriageResponse(
     response([
@@ -225,14 +242,53 @@ test("rejects unexpected fields and existing merge limits", () => {
 });
 
 test("rejects invalid expected id lists", () => {
-  const normalized = normalizeExperimentalTriageResponse(
-    response(),
-    ["pending-1", "pending-1"],
-    acceptedIds,
+  for (const [pending, accepted] of [
+    [[""], acceptedIds],
+    [["same"], ["same"]],
+    [["pending-1", "pending-1"], acceptedIds],
+  ] as const) {
+    const normalized = normalizeExperimentalTriageResponse(
+      response(),
+      pending,
+      accepted,
+    );
+
+    assert.equal(normalized.ok, false);
+    if (!normalized.ok) assert.equal(normalized.error.code, "invalid_expected_ids");
+  }
+});
+
+test("rejects expected id collection and code-point limits", () => {
+  const pendingLimit = Array.from({ length: 41 }, (_, index) => `pending-${index}`);
+  const acceptedLimit = Array.from({ length: 101 }, (_, index) => `accepted-${index}`);
+  const combinedLimitPending = Array.from({ length: 40 }, (_, index) => `pending-${index}`);
+  const combinedLimitAccepted = Array.from({ length: 81 }, (_, index) => `accepted-${index}`);
+  const id128 = "😀".repeat(128);
+  const id129 = "😀".repeat(129);
+
+  for (const [pending, accepted] of [
+    [pendingLimit, []],
+    [[], acceptedLimit],
+    [combinedLimitPending, combinedLimitAccepted],
+    [[], [id129]],
+  ] as const) {
+    const normalized = normalizeExperimentalTriageResponse(
+      response(),
+      pending,
+      accepted,
+    );
+
+    assert.equal(normalized.ok, false);
+    if (!normalized.ok) assert.equal(normalized.error.code, "invalid_expected_ids");
+  }
+
+  const acceptedAtLimit = normalizeExperimentalTriageResponse(
+    { results: [], acceptedMergeSuggestions: [] },
+    [],
+    [id128],
   );
 
-  assert.equal(normalized.ok, false);
-  if (!normalized.ok) assert.equal(normalized.error.code, "invalid_expected_ids");
+  assert.equal(acceptedAtLimit.ok, true);
 });
 
 test("normalization is deterministic and idempotent", () => {

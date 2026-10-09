@@ -1,5 +1,9 @@
 import {
+  MAX_ACCEPTED_WORDS,
+  MAX_COMBINED_WORDS,
   MAX_ACCEPTED_MERGE_SUGGESTIONS,
+  MAX_PENDING_WORDS,
+  MAX_WORD_ID_CODE_POINTS,
   type AcceptedMergeSuggestion,
   type TriageResponse,
   type TriageResult,
@@ -76,13 +80,24 @@ function parseResponse(value: unknown):
   }
 }
 
-function validExpectedIds(value: readonly string[]): value is readonly string[] {
-  if (!Array.isArray(value)) return false;
+function validExpectedIds(
+  value: readonly string[],
+  maximum: number,
+): value is readonly string[] {
+  if (!Array.isArray(value) || value.length > maximum) return false;
 
   const seen = new Set<string>();
 
   for (const id of value) {
-    if (typeof id !== "string" || id.length === 0 || seen.has(id)) return false;
+    if (
+      typeof id !== "string" ||
+      id.length === 0 ||
+      Array.from(id).length > MAX_WORD_ID_CODE_POINTS ||
+      seen.has(id)
+    ) {
+      return false;
+    }
+
     seen.add(id);
   }
 
@@ -90,7 +105,7 @@ function validExpectedIds(value: readonly string[]): value is readonly string[] 
 }
 
 function pairKey(firstId: string, secondId: string): string {
-  return [firstId, secondId].sort().join("\u0000");
+  return JSON.stringify([firstId, secondId].sort());
 }
 
 export function normalizeExperimentalTriageResponse(
@@ -98,7 +113,12 @@ export function normalizeExperimentalTriageResponse(
   pendingIds: readonly string[],
   acceptedIds: readonly string[],
 ): StructuralNormalizationResult {
-  if (!validExpectedIds(pendingIds) || !validExpectedIds(acceptedIds)) {
+  if (
+    !validExpectedIds(pendingIds, MAX_PENDING_WORDS) ||
+    !validExpectedIds(acceptedIds, MAX_ACCEPTED_WORDS) ||
+    pendingIds.length + acceptedIds.length > MAX_COMBINED_WORDS ||
+    pendingIds.some((id) => acceptedIds.includes(id))
+  ) {
     return failure("invalid_expected_ids");
   }
 
