@@ -1,6 +1,11 @@
 import "server-only";
 
 import { getOpenRouterApiKey, getOpenRouterModel } from "@/lib/ai/openRouterConfig";
+import {
+  normalizeExperimentalTriageResponse,
+  type NormalizationDiagnostics,
+  type NormalizationFailureCode,
+} from "@/lib/ai/triageStructuralNormalizer";
 import { MAX_ACCEPTED_MERGE_SUGGESTIONS } from "@/lib/ai/triage-contract";
 import type {
   AcceptedMergeSuggestion,
@@ -54,6 +59,11 @@ export type OpenRouterTriageFailureDiagnostic =
       code: Exclude<OpenRouterTriageFailureCode, "provider_result_invalid">;
       validationReason?: never;
     });
+
+export type TriageEvaluatorOptions = Readonly<{
+  responseMode?: "strict" | "experimental-structural-recovery";
+  onStructuralRecovery?: (diagnostics: NormalizationDiagnostics) => void;
+}>;
 
 export class OpenRouterTriageError extends Error {
   readonly diagnostic: OpenRouterTriageFailureDiagnostic;
@@ -378,6 +388,71 @@ function validateResults(
   return { results, acceptedMergeSuggestions };
 }
 
+function normalizationFailureToError(
+  code: NormalizationFailureCode,
+  finishReason: OpenRouterTriageFailureDiagnostic["finishReason"],
+): OpenRouterTriageError {
+  switch (code) {
+    case "result_shape_invalid":
+      return new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "result_shape",
+        finishReason,
+      });
+    case "pending_id_duplicate":
+      return new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "pending_id_duplicate",
+        finishReason,
+      });
+    case "pending_id_invalid":
+      return new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "pending_id_invalid",
+        finishReason,
+      });
+    case "relevance_invalid":
+      return new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "relevance_invalid",
+        finishReason,
+      });
+    case "attention_invalid":
+      return new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "attention_invalid",
+        finishReason,
+      });
+    case "spelling_suggestion_invalid":
+      return new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "spelling_suggestion_invalid",
+        finishReason,
+      });
+    case "merge_suggestion_shape_invalid":
+    case "merge_id_invalid":
+      return new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "accepted_merge_suggestion_invalid",
+        finishReason,
+      });
+    case "invalid_json":
+      return new OpenRouterTriageError({
+        code: "provider_structured_json_invalid",
+        finishReason,
+      });
+    case "invalid_expected_ids":
+    case "response_shape_invalid":
+    case "result_count_mismatch":
+    case "pending_id_missing":
+    case "merge_limit_exceeded":
+      return new OpenRouterTriageError({
+        code: "provider_result_incomplete",
+        finishReason,
+      });
+  }
+}
+
 function getFinishReason(
   choice: JsonRecord | undefined,
 ): OpenRouterTriageFailureDiagnostic["finishReason"] {
@@ -426,6 +501,7 @@ function readResponseContent(payload: unknown): {
 export async function triagePendingWordsForEvaluator(
   input: unknown,
   systemInstruction: string,
+  options: TriageEvaluatorOptions = {},
 ): Promise<TriageResponse> {
   const validatedInput = validateInput(input);
 
@@ -505,6 +581,21 @@ export async function triagePendingWordsForEvaluator(
       code: "provider_structured_json_invalid",
       finishReason,
     });
+  }
+
+  if (options.responseMode === "experimental-structural-recovery") {
+    const normalized = normalizeExperimentalTriageResponse(
+      structuredContent,
+      validatedInput.pendingWords.map(({ id }) => id),
+      validatedInput.acceptedWords.map(({ id }) => id),
+    );
+
+    if (!normalized.ok) {
+      throw normalizationFailureToError(normalized.error.code, finishReason);
+    }
+
+    options.onStructuralRecovery?.(normalized.diagnostics);
+    return normalized.response;
   }
 
   return validateResults(

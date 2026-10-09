@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   normalizeExperimentalTriageResponse,
   type StructuralNormalizationResult,
-} from "../scripts/ai-triage-structural-normalizer-poc";
+} from "../lib/ai/triageStructuralNormalizer";
 
 const pendingIds = ["pending-1", "pending-2"] as const;
 const acceptedIds = ["accepted-1", "accepted-2"] as const;

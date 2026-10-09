@@ -7,7 +7,7 @@ import {
   type AcceptedMergeSuggestion,
   type TriageResponse,
   type TriageResult,
-} from "../lib/ai/triage-contract";
+} from "./triage-contract";
 
 export type NormalizationFailureCode =
   | "invalid_json"

@@ -726,6 +726,16 @@ async function runCalibration(calibration: CalibrationSpec): Promise<boolean> {
                 : calibration.id === "C"
                   ? CALIBRATION_C_INSTRUCTION
                   : CALIBRATION_D_INSTRUCTION,
+              calibration.id === "D"
+                ? {
+                    responseMode: "experimental-structural-recovery",
+                    onStructuralRecovery: (diagnostics) => {
+                      console.log(
+                        `structural_recovery discardedSelfPairs=${diagnostics.discardedSelfPairs} discardedDuplicatePairs=${diagnostics.discardedDuplicatePairs}`,
+                      );
+                    },
+                  }
+                : undefined,
             );
       const metrics = evaluateScenario(scenario, response);
 
