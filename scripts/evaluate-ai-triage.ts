@@ -22,7 +22,7 @@ import {
 } from "./ai-triage-fixtures-v3";
 
 type CalibrationId = "A" | "B" | "C";
-type CalibrationSelection = CalibrationId | "both";
+type CalibrationSelection = CalibrationId | "both" | "all";
 
 type EvaluationOptions = Readonly<{
   mode: "dry-run" | "allow-network";
@@ -410,19 +410,24 @@ function validateFixtures(): void {
   }
 }
 
-function parseCalibration(value: string): CalibrationSelection {
+export function parseCalibration(value: string): CalibrationSelection {
   const normalized = value.toUpperCase();
 
   if (
     normalized === "A" ||
     normalized === "B" ||
     normalized === "C" ||
-    normalized === "BOTH"
+    normalized === "BOTH" ||
+    normalized === "ALL"
   ) {
-    return normalized === "BOTH" ? "both" : normalized;
+    return normalized === "BOTH"
+      ? "both"
+      : normalized === "ALL"
+        ? "all"
+        : normalized;
   }
 
-  throw new Error("Calibration must be A, B, or both.");
+  throw new Error("Calibration must be A, B, C, both, or all.");
 }
 
 function parseOptions(): EvaluationOptions {
@@ -461,23 +466,27 @@ function parseOptions(): EvaluationOptions {
     }
 
     throw new Error(
-      "Usage: npm run ai:evaluate -- --dry-run|--allow-network [--calibration A|B|C|both]",
+      "Usage: npm run ai:evaluate -- --dry-run|--allow-network [--calibration A|B|C|both|all]",
     );
   }
 
   if (mode === null) {
     throw new Error(
-      "Usage: npm run ai:evaluate -- --dry-run|--allow-network [--calibration A|B|C|both]",
+      "Usage: npm run ai:evaluate -- --dry-run|--allow-network [--calibration A|B|C|both|all]",
     );
   }
 
   return { mode, calibration };
 }
 
-function selectedCalibrations(selection: CalibrationSelection): readonly CalibrationSpec[] {
-  return selection === "both"
-    ? CALIBRATIONS
-    : CALIBRATIONS.filter((calibration) => calibration.id === selection);
+export function selectedCalibrations(
+  selection: CalibrationSelection,
+): readonly CalibrationSpec[] {
+  if (selection === "all") return CALIBRATIONS;
+  if (selection === "both") {
+    return CALIBRATIONS.filter((calibration) => calibration.id === "A" || calibration.id === "B");
+  }
+  return CALIBRATIONS.filter((calibration) => calibration.id === selection);
 }
 
 function printScenarioExpectations(scenario: EvaluationScenario): void {
@@ -616,6 +625,8 @@ function printDryRun(options: EvaluationOptions): void {
   console.log("EVALUATION CONFIG");
   console.log(`mode=${options.mode}`);
   console.log(`calibrations=${calibrations.map(({ id }) => id).join(",")}`);
+  console.log(`selected_calibrations=${calibrations.map(({ id }) => id).join(",")}`);
+  console.log(`max_openrouter_calls=${calibrations.length * evaluationScenarios.length}`);
   console.log(`model=${getOpenRouterModel()}`);
   console.log(`fixtures=${EVALUATION_FIXTURE_VERSION}`);
   console.log(`temperature=${OPENROUTER_TRIAGE_REQUEST_OPTIONS.temperature}`);

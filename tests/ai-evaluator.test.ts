@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { resolve } from "node:path";
 import test from "node:test";
 import {
   evaluateAcceptedMerges,
   evaluateSpelling,
+  parseCalibration,
+  selectedCalibrations,
   spellingSuggestionMatches,
   summarizeAcceptedMerges,
 } from "../scripts/evaluate-ai-triage";
@@ -14,9 +18,12 @@ const mergeScenario = evaluationScenarios.find(
 const spellingScenario = evaluationScenarios.find(
   (scenario) => scenario.id === "spelling",
 );
+const relevanceScenario = evaluationScenarios.find(
+  (scenario) => scenario.id === "relevance",
+);
 
-if (!mergeScenario || !spellingScenario) {
-  throw new Error("Expected the v2 merge and spelling fixtures.");
+if (!mergeScenario || !spellingScenario || !relevanceScenario) {
+  throw new Error("Expected the v3 merge, spelling, and relevance fixtures.");
 }
 
 const emptyResults = spellingScenario.input.pendingWords.map((word) => ({
@@ -93,4 +100,79 @@ test("spelling comparison ignores only capitalization and preserves null checks"
   });
 
   assert.equal(metric.failed, 0);
+});
+
+test("calibration selection preserves both as A+B and all as A+B+C", () => {
+  assert.equal(parseCalibration("A"), "A");
+  assert.equal(parseCalibration("B"), "B");
+  assert.equal(parseCalibration("C"), "C");
+  assert.equal(parseCalibration("both"), "both");
+  assert.equal(parseCalibration("all"), "all");
+  assert.deepEqual(selectedCalibrations("both").map(({ id }) => id), ["A", "B"]);
+  assert.deepEqual(selectedCalibrations("all").map(({ id }) => id), ["A", "B", "C"]);
+});
+
+test("fixture v3 uses an unambiguous braille pair and rejects Mais livros overlap", () => {
+  assert.deepEqual(
+    relevanceScenario.input.acceptedWords.filter((word) => word.id === "rel-c" || word.id === "rel-d"),
+    [
+      { id: "rel-c", text: "Disponibilizar livros em braile" },
+      { id: "rel-d", text: "Oferecer livros em braile aos leitores" },
+    ],
+  );
+  assert.deepEqual(relevanceScenario.expectations.acceptedMerges.forbiddenPairs, [
+    ["rel-a", "rel-c"],
+    ["rel-a", "rel-d"],
+  ]);
+
+  const validMetric = evaluateAcceptedMerges(relevanceScenario, {
+    results: [],
+    acceptedMergeSuggestions: [{ firstId: "rel-d", secondId: "rel-c" }],
+  });
+  assert.equal(validMetric.failed, 0);
+
+  const invalidMetric = evaluateAcceptedMerges(relevanceScenario, {
+    results: [],
+    acceptedMergeSuggestions: [{ firstId: "rel-a", secondId: "rel-c" }],
+  });
+  assert.ok(invalidMetric.failures.some((failure) => failure.includes("forbidden merge")));
+});
+
+test("v3 accepted merge expectations have no accepted/forbidden overlap", () => {
+  for (const scenario of evaluationScenarios) {
+    const accepted = new Set(
+      scenario.expectations.acceptedMerges.allowedPairs.map((pair) => [...pair].sort().join("\u0000")),
+    );
+    const forbidden = scenario.expectations.acceptedMerges.forbiddenPairs.map((pair) => [...pair].sort().join("\u0000"));
+    const required = scenario.expectations.acceptedMerges.requiredPairs.map((pair) => [...pair].sort().join("\u0000"));
+
+    assert.ok(forbidden.every((key) => !accepted.has(key)), `${scenario.id} has accepted/forbidden overlap`);
+    assert.ok(required.every((key) => !forbidden.includes(key)), `${scenario.id} has required/forbidden overlap`);
+  }
+});
+
+test("dry-run reports selected calibrations, maximum calls, and zero actual calls", () => {
+  const runDryRun = (selection: string): string => execFileSync(
+    process.execPath,
+    [
+      "--conditions=react-server",
+      "--import",
+      "tsx",
+      resolve("scripts/evaluate-ai-triage.ts"),
+      "--dry-run",
+      "--calibration",
+      selection,
+    ],
+    { cwd: resolve("."), encoding: "utf8" },
+  );
+
+  const bothOutput = runDryRun("both");
+  assert.match(bothOutput, /selected_calibrations=A,B/);
+  assert.match(bothOutput, /max_openrouter_calls=8/);
+  assert.match(bothOutput, /openrouter_calls=0/);
+
+  const allOutput = runDryRun("all");
+  assert.match(allOutput, /selected_calibrations=A,B,C/);
+  assert.match(allOutput, /max_openrouter_calls=12/);
+  assert.match(allOutput, /openrouter_calls=0/);
 });

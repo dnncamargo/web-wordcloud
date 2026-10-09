@@ -25,8 +25,8 @@ export const evaluationScenarios: readonly EvaluationScenario[] = [
       ...v2Relevance.input,
       acceptedWords: [
         ...v2Relevance.input.acceptedWords,
-        { id: "rel-c", text: "Instalar uma rampa na entrada" },
-        { id: "rel-d", text: "Colocar uma rampa junto à entrada" },
+        { id: "rel-c", text: "Disponibilizar livros em braile" },
+        { id: "rel-d", text: "Oferecer livros em braile aos leitores" },
       ],
     },
     expectations: {
@@ -37,7 +37,10 @@ export const evaluationScenarios: readonly EvaluationScenario[] = [
       },
       acceptedMerges: {
         requiredPairs: [["rel-c", "rel-d"]],
-        forbiddenPairs: [],
+        forbiddenPairs: [
+          ["rel-a", "rel-c"],
+          ["rel-a", "rel-d"],
+        ],
         allowedPairs: [["rel-c", "rel-d"]],
         maxSuggestions: 1,
       },
