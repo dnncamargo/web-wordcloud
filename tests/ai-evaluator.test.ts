@@ -8,6 +8,7 @@ import {
   parseCalibration,
   selectedCalibrations,
   spellingSuggestionMatches,
+  structuralRecoveryCounters,
   summarizeAcceptedMerges,
 } from "../scripts/evaluate-ai-triage";
 import { evaluationScenarios } from "../scripts/ai-triage-fixtures-v3";
@@ -112,6 +113,58 @@ test("calibration selection preserves both as A+B and all as A+B+C", () => {
   assert.deepEqual(selectedCalibrations("both").map(({ id }) => id), ["A", "B"]);
   assert.deepEqual(selectedCalibrations("all").map(({ id }) => id), ["A", "B", "C"]);
   assert.deepEqual(selectedCalibrations("D").map(({ id }) => id), ["D"]);
+});
+
+test("structural recovery counters separate clean, recovered, and rejected responses", () => {
+  const clean = structuralRecoveryCounters("clean");
+  const selfPair = structuralRecoveryCounters("recovered", {
+    discardedSelfPairs: 1,
+    discardedDuplicatePairs: 0,
+  });
+  const duplicatePair = structuralRecoveryCounters("recovered", {
+    discardedSelfPairs: 0,
+    discardedDuplicatePairs: 1,
+  });
+  const both = structuralRecoveryCounters("recovered", {
+    discardedSelfPairs: 1,
+    discardedDuplicatePairs: 2,
+  });
+  const rejected = structuralRecoveryCounters("rejected");
+
+  assert.deepEqual(clean, {
+    responsesClean: 1,
+    responsesRecovered: 0,
+    discardedSelfPairs: 0,
+    discardedDuplicatePairs: 0,
+    responsesRejected: 0,
+  });
+  assert.equal(selfPair.responsesClean, 0);
+  assert.equal(selfPair.responsesRecovered, 1);
+  assert.equal(selfPair.discardedSelfPairs, 1);
+  assert.equal(duplicatePair.responsesRecovered, 1);
+  assert.equal(duplicatePair.discardedDuplicatePairs, 1);
+  assert.equal(both.responsesRecovered, 1);
+  assert.equal(both.discardedSelfPairs, 1);
+  assert.equal(both.discardedDuplicatePairs, 2);
+  assert.deepEqual(rejected, {
+    responsesClean: 0,
+    responsesRecovered: 0,
+    discardedSelfPairs: 0,
+    discardedDuplicatePairs: 0,
+    responsesRejected: 1,
+  });
+
+  const attempted = [clean, both, rejected];
+  assert.equal(
+    attempted.reduce(
+      (total, counters) =>
+        total + counters.responsesClean + counters.responsesRecovered + counters.responsesRejected,
+      0,
+    ),
+    3,
+  );
+  assert.equal(JSON.stringify(both).includes("student"), false);
+  assert.equal(JSON.stringify(both).includes("payload"), false);
 });
 
 test("fixture v3 uses an unambiguous braille pair and rejects Mais livros overlap", () => {

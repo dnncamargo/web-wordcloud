@@ -10,6 +10,7 @@ import {
   type TriageResponse,
   type TriageResult,
 } from "../lib/ai/triage-contract";
+import type { NormalizationDiagnostics } from "../lib/ai/triageStructuralNormalizer";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { CALIBRATION_B_INSTRUCTION } from "./ai-calibration-b";
@@ -53,6 +54,62 @@ export type AcceptedMergeSummary = Readonly<{
   falseNegatives: readonly MergePair[];
   duplicatePairs: readonly MergePair[];
 }>;
+
+export type StructuralRecoveryCounters = Readonly<{
+  responsesClean: number;
+  responsesRecovered: number;
+  discardedSelfPairs: number;
+  discardedDuplicatePairs: number;
+  responsesRejected: number;
+}>;
+
+const ZERO_NORMALIZATION_DIAGNOSTICS: NormalizationDiagnostics = {
+  discardedSelfPairs: 0,
+  discardedDuplicatePairs: 0,
+};
+
+const ZERO_STRUCTURAL_RECOVERY_COUNTERS: StructuralRecoveryCounters = {
+  responsesClean: 0,
+  responsesRecovered: 0,
+  discardedSelfPairs: 0,
+  discardedDuplicatePairs: 0,
+  responsesRejected: 0,
+};
+
+export function structuralRecoveryCounters(
+  disposition: "clean" | "recovered" | "rejected",
+  diagnostics: NormalizationDiagnostics = ZERO_NORMALIZATION_DIAGNOSTICS,
+): StructuralRecoveryCounters {
+  if (disposition === "rejected") {
+    return { ...ZERO_STRUCTURAL_RECOVERY_COUNTERS, responsesRejected: 1 };
+  }
+
+  const hasDiscardedPairs =
+    diagnostics.discardedSelfPairs > 0 ||
+    diagnostics.discardedDuplicatePairs > 0;
+
+  return {
+    ...ZERO_STRUCTURAL_RECOVERY_COUNTERS,
+    responsesClean: disposition === "clean" && !hasDiscardedPairs ? 1 : 0,
+    responsesRecovered: disposition === "recovered" || hasDiscardedPairs ? 1 : 0,
+    discardedSelfPairs: diagnostics.discardedSelfPairs,
+    discardedDuplicatePairs: diagnostics.discardedDuplicatePairs,
+  };
+}
+
+function addStructuralRecoveryCounters(
+  target: StructuralRecoveryCounters,
+  source: StructuralRecoveryCounters,
+): StructuralRecoveryCounters {
+  return {
+    responsesClean: target.responsesClean + source.responsesClean,
+    responsesRecovered: target.responsesRecovered + source.responsesRecovered,
+    discardedSelfPairs: target.discardedSelfPairs + source.discardedSelfPairs,
+    discardedDuplicatePairs:
+      target.discardedDuplicatePairs + source.discardedDuplicatePairs,
+    responsesRejected: target.responsesRejected + source.responsesRejected,
+  };
+}
 
 const CALIBRATIONS: readonly CalibrationSpec[] = [
   {
@@ -681,6 +738,7 @@ function printTotals(
   providerFailures: number,
   schemaFailures: number,
   failureCodes: ReadonlyMap<string, number>,
+  structuralRecovery: StructuralRecoveryCounters,
 ): void {
   console.log(`\nTOTAL ${calibration.id}`);
 
@@ -696,6 +754,29 @@ function printTotals(
     }`,
   );
   console.log(`openrouter_calls=${openRouterCalls}`);
+
+  if (calibration.id === "D") {
+    console.log(`responses_clean=${structuralRecovery.responsesClean}`);
+    console.log(`responses_recovered=${structuralRecovery.responsesRecovered}`);
+    console.log(`discarded_self_pairs=${structuralRecovery.discardedSelfPairs}`);
+    console.log(
+      `discarded_duplicate_pairs=${structuralRecovery.discardedDuplicatePairs}`,
+    );
+    console.log(`responses_rejected=${structuralRecovery.responsesRejected}`);
+    console.log(`responses_attempted=${openRouterCalls}`);
+    console.log(
+      `strict_structural_compliance=${
+        structuralRecovery.responsesRecovered === 0 &&
+        structuralRecovery.responsesRejected === 0
+          ? "PASS"
+          : "FAIL"
+      }`,
+    );
+    console.log("pedagogical_metrics_source=responses_after_normalization");
+    console.log(
+      "recovered_responses_are_not_clean_model_conformance=true",
+    );
+  }
 }
 
 async function runCalibration(calibration: CalibrationSpec): Promise<boolean> {
@@ -709,11 +790,13 @@ async function runCalibration(calibration: CalibrationSpec): Promise<boolean> {
   let providerFailures = 0;
   let schemaFailures = 0;
   const failureCodes = new Map<string, number>();
+  let structuralRecovery = ZERO_STRUCTURAL_RECOVERY_COUNTERS;
 
   console.log(`\nCALIBRATION ${calibration.id} — ${calibration.label}`);
 
   for (const scenario of evaluationScenarios) {
     openRouterCalls += 1;
+    let structuralDiagnosticsForResponse: NormalizationDiagnostics | null = null;
 
     try {
       const response =
@@ -730,14 +813,33 @@ async function runCalibration(calibration: CalibrationSpec): Promise<boolean> {
                 ? {
                     responseMode: "experimental-structural-recovery",
                     onStructuralRecovery: (diagnostics) => {
-                      console.log(
-                        `structural_recovery discardedSelfPairs=${diagnostics.discardedSelfPairs} discardedDuplicatePairs=${diagnostics.discardedDuplicatePairs}`,
-                      );
+                      structuralDiagnosticsForResponse = diagnostics;
                     },
                   }
                 : undefined,
             );
       const metrics = evaluateScenario(scenario, response);
+
+      if (calibration.id === "D") {
+        const responseDiagnostics =
+          structuralDiagnosticsForResponse ?? ZERO_NORMALIZATION_DIAGNOSTICS;
+        const disposition =
+          responseDiagnostics.discardedSelfPairs > 0 ||
+          responseDiagnostics.discardedDuplicatePairs > 0
+            ? "recovered"
+            : "clean";
+        const responseCounters = structuralRecoveryCounters(
+          disposition,
+          responseDiagnostics,
+        );
+        structuralRecovery = addStructuralRecoveryCounters(
+          structuralRecovery,
+          responseCounters,
+        );
+        console.log(
+          `structural_response=${disposition} responses_clean=${responseCounters.responsesClean} responses_recovered=${responseCounters.responsesRecovered} discarded_self_pairs=${responseCounters.discardedSelfPairs} discarded_duplicate_pairs=${responseCounters.discardedDuplicatePairs} responses_rejected=${responseCounters.responsesRejected}`,
+        );
+      }
 
       printScenarioExpectations(scenario);
       printIndividualResults(scenario, response);
@@ -761,6 +863,16 @@ async function runCalibration(calibration: CalibrationSpec): Promise<boolean> {
       ) {
         schemaFailures += 1;
       }
+      if (calibration.id === "D") {
+        const responseCounters = structuralRecoveryCounters("rejected");
+        structuralRecovery = addStructuralRecoveryCounters(
+          structuralRecovery,
+          responseCounters,
+        );
+        console.log(
+          "structural_response=rejected responses_clean=0 responses_recovered=0 discarded_self_pairs=0 discarded_duplicate_pairs=0 responses_rejected=1",
+        );
+      }
       console.log(
         `\nSCENARIO ${scenario.id} — provider failure code=${diagnostic.code}`,
       );
@@ -777,11 +889,15 @@ async function runCalibration(calibration: CalibrationSpec): Promise<boolean> {
     providerFailures,
     schemaFailures,
     failureCodes,
+    structuralRecovery,
   );
 
   return (
     providerFailures === 0 &&
-    CAPABILITIES.every((capability) => totals[capability].failed === 0)
+    CAPABILITIES.every((capability) => totals[capability].failed === 0) &&
+    (calibration.id !== "D" ||
+      (structuralRecovery.responsesRecovered === 0 &&
+        structuralRecovery.responsesRejected === 0))
   );
 }
 
