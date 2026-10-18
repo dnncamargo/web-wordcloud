@@ -10,6 +10,8 @@ import {
 } from "../scripts/approve-semantic-anonymization-batch";
 import {
   anonymizationRulesFingerprint,
+  applyAnonymizationApprovals,
+  type AnonymizationApprovalStore,
   buildAnonymizationReview,
   corpusVersionForInputs,
   createBatchApprovalStore,
@@ -46,6 +48,41 @@ test("explicit batch approval creates one declaration for every current item", (
   assert.equal(renderBatchApprovalMetadata(store, review).includes("original_texts_printed=false"), true);
   assert.equal(JSON.stringify(store).includes("Alice Silva"), false);
   assert.equal(JSON.stringify(store).includes("Escola Aurora"), false);
+  assert.equal(applyAnonymizationApprovals([], prepared.items, review, store, dictionary).review.approvalComplete, true);
+});
+
+test("batch declaration is invalidated by any set, count, identity, or final approval change", () => {
+  const { dictionary, prepared, review } = syntheticReview();
+  const store = createBatchApprovalStore(prepared.items, review, true, dictionary);
+  type MutableBatchStore = {
+    declarationFingerprint?: string;
+    declaredItemCount?: number;
+    approvals: Array<{ reviewId: string; approvedText?: string; approvedTextFingerprint?: string; [key: string]: unknown }>;
+  };
+  const apply = (change: (copy: MutableBatchStore) => void) => {
+    const copy = JSON.parse(JSON.stringify(store)) as MutableBatchStore;
+    change(copy);
+    return applyAnonymizationApprovals([], prepared.items, review, copy as unknown as AnonymizationApprovalStore, dictionary).review;
+  };
+  assert.equal(apply((copy) => { copy.declarationFingerprint = "tampered"; }).approvalComplete, false);
+  assert.equal(apply((copy) => { copy.declaredItemCount = (copy.declaredItemCount ?? 0) + 1; }).approvalComplete, false);
+  assert.equal(apply((copy) => { copy.approvals[0].reviewId = "unknown"; }).approvalComplete, false);
+  assert.equal(apply((copy) => { copy.approvals[0].approvedText = "[EDITED]"; }).approvalComplete, false);
+  assert.equal(apply((copy) => { copy.approvals[0].approvedTextFingerprint = "tampered"; }).approvalComplete, false);
+  assert.equal(apply((copy) => { copy.approvals.push({ ...copy.approvals[0] }); }).approvalComplete, false);
+  assert.equal(apply((copy) => { copy.approvals.pop(); }).approvalComplete, false);
+});
+
+test("individual approval stores remain compatible without a batch declaration", () => {
+  const { dictionary, prepared, review } = syntheticReview();
+  const batch = createBatchApprovalStore(prepared.items, review, true, dictionary);
+  const individual = {
+    version: batch.version,
+    corpusVersion: batch.corpusVersion,
+    rulesFingerprint: batch.rulesFingerprint,
+    approvals: batch.approvals,
+  } as const;
+  assert.equal(applyAnonymizationApprovals([], prepared.items, review, individual, dictionary).review.approvalComplete, true);
 });
 
 test("batch approval publication is external, atomic, and never overwrites", async () => {

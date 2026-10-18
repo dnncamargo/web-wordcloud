@@ -12,6 +12,7 @@ export type AnonymizationReview = Readonly<{
   reviewComplete: boolean;
   corpusVersion?: string;
   rulesFingerprint?: string;
+  dictionaryFingerprint?: string;
   approvedItemCount?: number;
   pendingApprovalCount?: number;
   approvalComplete?: boolean;
@@ -41,11 +42,14 @@ export type AnonymizationApprovalStore = Readonly<{
   version: "semantic-merge-anonymization-approval-v1";
   corpusVersion: string;
   rulesFingerprint: string;
+  dictionaryFingerprint?: string;
   approvals: readonly AnonymizationApproval[];
   approvalMode?: "individual" | "operator-batch";
   declarationFingerprint?: string;
   declaredItemCount?: number;
 }>;
+
+const BATCH_DECLARATION_VERSION = "semantic-merge-approval-declaration-v2" as const;
 
 export class AnonymizationError extends Error {
   constructor(message: string) {
@@ -64,6 +68,10 @@ function fingerprint(value: string): string {
 
 export function anonymizationRulesFingerprint(dictionary: AnonymizationDictionary): string {
   return fingerprint(JSON.stringify({ version: ANONYMIZATION_RULES_VERSION, dictionary: [...dictionary].sort(([first], [second]) => first.localeCompare(second)) }));
+}
+
+export function anonymizationDictionaryFingerprint(dictionary: AnonymizationDictionary): string {
+  return fingerprint(JSON.stringify({ version: "semantic-merge-dictionary-v1", dictionary: [...dictionary].sort(([first], [second]) => first.localeCompare(second)) }));
 }
 
 export function corpusVersionForInputs(
@@ -198,9 +206,28 @@ export function applyAnonymizationApprovals(
   store: AnonymizationApprovalStore | undefined,
   dictionary: AnonymizationDictionary = new Map(),
 ): { inputs: readonly TriageInput[]; review: AnonymizationReview } {
-  const validStore = store?.version === "semantic-merge-anonymization-approval-v1" &&
+  const baseStoreIsValid = store?.version === "semantic-merge-anonymization-approval-v1" &&
     store.corpusVersion === review.corpusVersion &&
     store.rulesFingerprint === review.rulesFingerprint;
+  const isBatch = store?.approvalMode === "operator-batch";
+  const currentDictionaryFingerprint = anonymizationDictionaryFingerprint(dictionary);
+  const currentItemsById = new Map(items.map((item) => [item.reviewId, item]));
+  const batchDeclarationIsValid = isBatch && baseStoreIsValid && store?.dictionaryFingerprint === currentDictionaryFingerprint &&
+    store.declaredItemCount === items.length && store.approvals.length === items.length &&
+    new Set(store.approvals.map((approval) => approval.reviewId)).size === items.length &&
+    new Set(items.map((item) => item.reviewId)).size === items.length &&
+    store.approvals.every((approval) => items.some((item) => item.reviewId === approval.reviewId)) &&
+    store.approvals.every((approval) => {
+      const item = currentItemsById.get(approval.reviewId);
+      return approval.status === "approved" && item !== undefined &&
+        approval.sourceTextFingerprint === item.sourceTextFingerprint &&
+        approval.baseAnonymizedTextFingerprint === item.anonymizedTextFingerprint &&
+        typeof approval.approvedText === "string" &&
+        approval.approvedTextFingerprint === fingerprint(approval.approvedText) &&
+        validateApprovedAnonymizedText(approval.approvedText, dictionary);
+    }) &&
+    store.declarationFingerprint === batchDeclarationFingerprint(items, store.approvals, review, dictionary);
+  const validStore = baseStoreIsValid && (!isBatch || batchDeclarationIsValid);
   const approvals = new Map((validStore ? store!.approvals : []).map((approval) => [approval.reviewId, approval]));
   const approvedTexts = new Map<string, string>();
   let approvedItemCount = 0;
@@ -261,31 +288,57 @@ export function createBatchApprovalStore(
   if (uniqueIds.size !== items.length || items.some((item) => !validateApprovedAnonymizedText(item.anonymizedText, dictionary))) {
     throw new AnonymizationError("The anonymization review items are inconsistent.");
   }
-  const declarationFingerprint = fingerprint(JSON.stringify({
-    corpusVersion: review.corpusVersion,
-    rulesFingerprint: review.rulesFingerprint,
-    items: items.map((item) => ({
-      reviewId: item.reviewId,
-      sourceTextFingerprint: item.sourceTextFingerprint,
-      anonymizedTextFingerprint: item.anonymizedTextFingerprint,
-    })),
+  const approvals = items.map((item) => ({
+    reviewId: item.reviewId,
+    sourceTextFingerprint: item.sourceTextFingerprint,
+    baseAnonymizedTextFingerprint: item.anonymizedTextFingerprint,
+    approvedText: item.anonymizedText,
+    approvedTextFingerprint: fingerprint(item.anonymizedText),
+    status: "approved" as const,
   }));
+  const declarationFingerprint = batchDeclarationFingerprint(items, approvals, review, dictionary);
   return {
     version: "semantic-merge-anonymization-approval-v1",
     corpusVersion: review.corpusVersion,
     rulesFingerprint: review.rulesFingerprint,
+    dictionaryFingerprint: anonymizationDictionaryFingerprint(dictionary),
     approvalMode: "operator-batch",
     declarationFingerprint,
     declaredItemCount: items.length,
-    approvals: items.map((item) => ({
-      reviewId: item.reviewId,
-      sourceTextFingerprint: item.sourceTextFingerprint,
-      baseAnonymizedTextFingerprint: item.anonymizedTextFingerprint,
-      approvedText: item.anonymizedText,
-      approvedTextFingerprint: item.anonymizedTextFingerprint,
-      status: "approved" as const,
-    })),
+    approvals,
   };
+}
+
+export function batchDeclarationFingerprint(
+  items: readonly AnonymizationReviewItem[],
+  approvals: readonly AnonymizationApproval[],
+  review: AnonymizationReview,
+  dictionary: AnonymizationDictionary = new Map(),
+): string {
+  const approvalsById = new Map(approvals.map((approval) => [approval.reviewId, approval]));
+  const canonicalItems = [...items]
+    .sort((first, second) => first.reviewId.localeCompare(second.reviewId))
+    .map((item) => {
+      const approval = approvalsById.get(item.reviewId);
+      return {
+        reviewId: item.reviewId,
+        cloudPseudonym: item.cloudPseudonym,
+        field: item.field,
+        wordPseudonym: item.wordPseudonym ?? null,
+        sourceTextFingerprint: item.sourceTextFingerprint,
+        baseAnonymizedTextFingerprint: item.anonymizedTextFingerprint,
+        finalApprovedTextFingerprint: approval?.approvedTextFingerprint ?? null,
+      };
+    });
+  return fingerprint(JSON.stringify({
+    version: BATCH_DECLARATION_VERSION,
+    rulesVersion: ANONYMIZATION_RULES_VERSION,
+    rulesFingerprint: review.rulesFingerprint,
+    dictionaryFingerprint: review.dictionaryFingerprint ?? anonymizationDictionaryFingerprint(dictionary),
+    corpusVersion: review.corpusVersion,
+    declaredItemCount: items.length,
+    items: canonicalItems,
+  }));
 }
 
 export function anonymizeTriageInput(

@@ -29,6 +29,7 @@ import {
 } from "./semantic-annotation-workspace";
 import {
   applyAnonymizationApprovals,
+  anonymizationDictionaryFingerprint,
   buildAnonymizationReview,
   corpusVersionForInputs,
   anonymizationRulesFingerprint,
@@ -457,6 +458,7 @@ export function anonymizeEvaluationPlan(
     ...prepared.review,
     corpusVersion: corpusVersionForInputs(plan.entries),
     rulesFingerprint: anonymizationRulesFingerprint(dictionary),
+    dictionaryFingerprint: anonymizationDictionaryFingerprint(dictionary),
     approvedItemCount: 0,
     pendingApprovalCount: prepared.items.length,
     approvalComplete: false,
