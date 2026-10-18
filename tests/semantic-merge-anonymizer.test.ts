@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import test from "node:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -64,26 +64,37 @@ test("all items require current explicit approvals and stale approvals remain pe
 
 test("local review server persists only sanitized approval text", async () => {
   const root = await mkdtemp(join(tmpdir(), "semantic-anonymization-review-"));
+  let server: Awaited<ReturnType<typeof startAnonymizationReviewServer>> | undefined;
   try {
-    const dictionary = parseAnonymizationDictionary({ "Alice Silva": "[PERSON]" });
+    const dictionary = new Map<string, string>();
     const plan = anonymizeEvaluationPlan({
       queue: { benchmarkVersion: "semantic-merge-v1", selectionVersion: "lexical-stratified-v1", targetCount: 0, candidateCount: 0, selectedCount: 0, selectionCriteria: [], tierCounts: { high: 0, medium: 0, low: 0 }, cloudCounts: {}, items: [] },
-      entries: [{ strategy: "unified", cloudPseudonym: "cloud", input: { question: "Nome: Alice Silva", acceptedWords: [], pendingWords: [] }, queueCaseCount: 0, inputCharacterCount: 0 }],
+      entries: [{ strategy: "unified", cloudPseudonym: "cloud", input: { question: "Nome: joao", acceptedWords: [], pendingWords: [] }, queueCaseCount: 0, inputCharacterCount: 0 }],
       clouds: 1, callsPerStrategy: 1, totalCalls: 1, acceptedWordCount: 0, inputCharacterCount: 0, scorableCases: 0, positiveAnnotationCount: 0,
     }, dictionary);
     const approvalPath = join(root, "approvals.json");
-    const server = await startAnonymizationReviewServer(plan, approvalPath, dictionary, 0);
+    await writeFile(approvalPath, JSON.stringify({ version: "semantic-merge-anonymization-approval-v1", corpusVersion: "old-corpus", rulesFingerprint: "old-rules", approvals: [{ reviewId: "old", status: "approved" }] }), { flag: "wx" });
+    server = await startAnonymizationReviewServer(plan, approvalPath, dictionary, 0);
     const address = server.address();
     assert.equal(typeof address, "object");
     const base = `http://127.0.0.1:${(address as { port: number }).port}`;
-    const state = await (await fetch(`${base}/state`)).json() as { items: Array<{ reviewId: string; anonymizedText: string }> };
+    const state = await (await fetch(`${base}/state`)).json() as { items: Array<{ reviewId: string; anonymizedText: string }>; approvals: unknown[]; storeCompatible: boolean };
     assert.equal(state.items.length, 1);
-    const response = await fetch(`${base}/approval`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reviewId: state.items[0]!.reviewId, status: "approved", approvedText: state.items[0]!.anonymizedText }) });
+    assert.equal(state.approvals.length, 0);
+    assert.equal(state.storeCompatible, true);
+    const response = await fetch(`${base}/approval`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reviewId: state.items[0]!.reviewId, status: "approved", approvedText: "[PERSON]" }) });
     assert.equal(response.status, 200);
     const stored = await readFile(approvalPath, "utf8");
-    assert.equal(stored.includes("Alice Silva"), false);
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    assert.equal(stored.includes("Nome: joao"), false);
+    const approvedStore = JSON.parse(stored);
+    const approvedPlan = applyAnonymizationApprovals(plan.entries, plan.anonymizationItems!, plan.anonymization!, approvedStore, dictionary);
+    assert.equal(approvedPlan.review.approvalComplete, true);
+    const rejected = await fetch(`${base}/approval`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ reviewId: state.items[0]!.reviewId, status: "rejected", approvedText: "edited but rejected" }) });
+    assert.equal(rejected.status, 200);
+    const rejectedStore = await readFile(approvalPath, "utf8");
+    assert.equal(rejectedStore.includes("edited but rejected"), false);
   } finally {
+    if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
     await rm(root, { recursive: true, force: true });
   }
 });

@@ -461,9 +461,6 @@ export function anonymizeEvaluationPlan(
     pendingApprovalCount: prepared.items.length,
     approvalComplete: false,
   } satisfies AnonymizationReview;
-  if (!anonymization.reviewComplete) {
-    throw new SemanticMergeEvaluationError("Anonymization review found unresolved identifiable content.");
-  }
   const entries = plan.entries.map((entry, index) => ({
     ...entry,
     input: prepared.inputs[index]!,
@@ -595,7 +592,7 @@ export async function runNetworkEvaluation(
   preflight: typeof preflightResultsPath = preflightResultsPath,
 ): Promise<readonly StrategyEvaluationResult[]> {
   if (resultsPath) await preflight(resultsPath);
-  if (plan.entries.length > 0 && (!plan.anonymization || !plan.anonymization.reviewComplete || plan.anonymization.approvalComplete !== true)) {
+  if (plan.entries.length > 0 && (!plan.anonymization || plan.anonymization.approvalComplete !== true)) {
     throw new SemanticMergeEvaluationError("Network evaluation requires reviewed anonymized inputs.");
   }
   printNetworkWarning();

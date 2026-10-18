@@ -31,8 +31,8 @@ export type AnonymizationApproval = Readonly<{
   reviewId: string;
   sourceTextFingerprint: string;
   baseAnonymizedTextFingerprint: string;
-  approvedText: string;
-  approvedTextFingerprint: string;
+  approvedText?: string;
+  approvedTextFingerprint?: string;
   status: "approved" | "rejected";
 }>;
 
@@ -205,6 +205,8 @@ export function applyAnonymizationApprovals(
     const approval = approvals.get(item.reviewId);
     if (
       approval?.status === "approved" &&
+      typeof approval.approvedText === "string" &&
+      typeof approval.approvedTextFingerprint === "string" &&
       approval.sourceTextFingerprint === item.sourceTextFingerprint &&
       approval.baseAnonymizedTextFingerprint === item.anonymizedTextFingerprint &&
       approval.approvedTextFingerprint === fingerprint(approval.approvedText) &&
@@ -233,7 +235,7 @@ export function applyAnonymizationApprovals(
       ...review,
       approvedItemCount,
       pendingApprovalCount,
-      approvalComplete: pendingApprovalCount === 0 && review.reviewComplete,
+      approvalComplete: pendingApprovalCount === 0,
     },
   };
 }

@@ -64,8 +64,10 @@ function storeCompatible(plan: EvaluationPlan, store: AnonymizationApprovalStore
 
 export async function startAnonymizationReviewServer(plan: EvaluationPlan, approvalPath: string, dictionary: ReadonlyMap<string, string>, port = Number(process.env.SEMANTIC_MERGE_REVIEW_PORT ?? "4317")) {
   const items = plan.anonymizationItems ?? [];
-  let store = await loadAnonymizationApprovals(approvalPath, true);
-  let compatible = storeCompatible(plan, store);
+  const loadedStore = await loadAnonymizationApprovals(approvalPath, true);
+  let compatible = storeCompatible(plan, loadedStore);
+  let store = compatible ? loadedStore : undefined;
+  compatible = true;
   const server = createServer(async (request, response) => {
     try {
       if (request.method === "GET" && request.url === "/") { response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }); response.end(page()); return; }
@@ -76,8 +78,11 @@ export async function startAnonymizationReviewServer(plan: EvaluationPlan, appro
       if (body === null || typeof body !== "object" || Array.isArray(body)) { json(response, 400, { error: "invalid approval" }); return; }
       const value = body as Record<string, unknown>;
       const item = items.find((candidate) => candidate.reviewId === value.reviewId);
-      if (!item || (value.status !== "approved" && value.status !== "rejected") || typeof value.approvedText !== "string" || !validateApprovedAnonymizedText(value.approvedText, dictionary)) { json(response, 422, { error: "approval failed local validation" }); return; }
-      const approval: AnonymizationApproval = { reviewId: item.reviewId, sourceTextFingerprint: item.sourceTextFingerprint, baseAnonymizedTextFingerprint: item.anonymizedTextFingerprint, approvedText: value.approvedText, approvedTextFingerprint: hash(value.approvedText), status: value.status };
+      if (!item || (value.status !== "approved" && value.status !== "rejected") || (value.status === "approved" && (typeof value.approvedText !== "string" || !validateApprovedAnonymizedText(value.approvedText, dictionary)))) { json(response, 422, { error: "approval failed local validation" }); return; }
+      const approvedText = typeof value.approvedText === "string" ? value.approvedText : item.anonymizedText;
+      const approval: AnonymizationApproval = value.status === "approved"
+        ? { reviewId: item.reviewId, sourceTextFingerprint: item.sourceTextFingerprint, baseAnonymizedTextFingerprint: item.anonymizedTextFingerprint, approvedText, approvedTextFingerprint: hash(approvedText), status: "approved" }
+        : { reviewId: item.reviewId, sourceTextFingerprint: item.sourceTextFingerprint, baseAnonymizedTextFingerprint: item.anonymizedTextFingerprint, status: "rejected" };
       const approvals = [...(store?.approvals ?? []).filter((candidate) => candidate.reviewId !== item.reviewId), approval];
       const next: AnonymizationApprovalStore = { version: APPROVAL_VERSION, corpusVersion: plan.anonymization!.corpusVersion!, rulesFingerprint: plan.anonymization!.rulesFingerprint!, approvals };
       await saveStore(approvalPath, next); store = next; compatible = true; json(response, 200, approval);

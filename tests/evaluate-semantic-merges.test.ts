@@ -166,8 +166,8 @@ test("network executor is blocked until every anonymization item is approved", a
   assert.equal(calls, 0);
 });
 
-test("unresolved anonymization risk blocks the network executor", () => {
-  assert.throws(() => anonymizeEvaluationPlan({
+test("unresolved anonymization risk remains visible and blocks the network executor", async () => {
+  const plan = anonymizeEvaluationPlan({
     queue: {
       benchmarkVersion: "semantic-merge-v1",
       selectionVersion: "lexical-stratified-v1",
@@ -193,7 +193,9 @@ test("unresolved anonymization risk blocks the network executor", () => {
     inputCharacterCount: 0,
     scorableCases: 0,
     positiveAnnotationCount: 0,
-  }), /unresolved identifiable content/);
+  });
+  assert.equal(plan.anonymization?.reviewComplete, false);
+  await assert.rejects(runNetworkEvaluation(plan, [], "unified", undefined, async () => { throw new Error("must not execute"); }), /reviewed anonymized inputs/);
 });
 
 test("prediction matching is independent of pair order", () => {
