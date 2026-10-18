@@ -1,4 +1,5 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { link, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -90,11 +91,20 @@ export type StrategyEvaluationResult = Readonly<{
   metrics: SemanticMergeBenchmarkReport;
 }>;
 
+export type ResultsPreflight = Readonly<{
+  targetPath: string;
+  parentPath: string;
+}>;
+
 export class SemanticMergeEvaluationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "SemanticMergeEvaluationError";
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function requireExternalPath(path: string, description: string): string {
@@ -377,12 +387,94 @@ async function loadRunnerData(options: SemanticRunnerOptions) {
   return { imported, queue, annotatedCases };
 }
 
-async function writeResults(path: string, value: unknown): Promise<void> {
-  const target = requireExternalPath(path, "Results path");
-  await mkdir(dirname(target), { recursive: true });
-  const temporary = `${target}.${process.pid}.tmp`;
-  await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, { encoding: "utf8", flag: "wx" });
-  await rename(temporary, target);
+export async function writeResults(path: string, value: unknown): Promise<void> {
+  const preflight = await preflightResultsPath(path);
+  const temporary = `${preflight.targetPath}.${process.pid}.${randomUUID()}.partial`;
+  try {
+    await writeFile(temporary, `${JSON.stringify(value, null, 2)}\n`, {
+      encoding: "utf8",
+      flag: "wx",
+    });
+    await link(temporary, preflight.targetPath);
+  } catch (error) {
+    await unlink(temporary).catch(() => undefined);
+    throw new SemanticMergeEvaluationError(
+      error instanceof Error ? error.message : "Unable to publish evaluation results.",
+    );
+  }
+  await unlink(temporary);
+}
+
+function isErrorCode(error: unknown, code: string): boolean {
+  return isRecord(error) && error.code === code;
+}
+
+export async function preflightResultsPath(path: string): Promise<ResultsPreflight> {
+  const targetPath = requireExternalPath(path, "Results path");
+  const parentPath = dirname(targetPath);
+  let parentStats;
+  try {
+    parentStats = await stat(parentPath);
+  } catch (error) {
+    if (isErrorCode(error, "ENOENT")) {
+      throw new SemanticMergeEvaluationError("Results directory does not exist.");
+    }
+    throw new SemanticMergeEvaluationError("Results directory cannot be inspected.");
+  }
+  if (!parentStats.isDirectory()) {
+    throw new SemanticMergeEvaluationError("Results parent is not a directory.");
+  }
+  try {
+    await stat(targetPath);
+    throw new SemanticMergeEvaluationError("Results destination already exists.");
+  } catch (error) {
+    if (!isErrorCode(error, "ENOENT")) throw error;
+  }
+  const probe = `${targetPath}.${process.pid}.${randomUUID()}.preflight`;
+  try {
+    await writeFile(probe, "preflight", { encoding: "utf8", flag: "wx" });
+    await unlink(probe);
+  } catch {
+    await unlink(probe).catch(() => undefined);
+    throw new SemanticMergeEvaluationError("Results destination is not writable.");
+  }
+  return { targetPath, parentPath };
+}
+
+function printNetworkWarning(): void {
+  console.log(
+    "WARNING: This experimental evaluation will send the investigative question and accepted idea text from the real corpus to OpenRouter.",
+  );
+}
+
+export async function runNetworkEvaluation(
+  plan: EvaluationPlan,
+  benchmarkCases: readonly AcceptedMergeBenchmarkCase[],
+  selection: StrategySelection,
+  resultsPath: string | undefined,
+  evaluate: typeof evaluateStrategy = evaluateStrategy,
+): Promise<readonly StrategyEvaluationResult[]> {
+  if (resultsPath) await preflightResultsPath(resultsPath);
+  printNetworkWarning();
+  const results: StrategyEvaluationResult[] = [];
+  for (const strategy of selectedStrategies(selection)) {
+    results.push(await evaluate(strategy, plan.entries, benchmarkCases));
+  }
+  if (resultsPath) {
+    await writeResults(resultsPath, {
+      status: "complete",
+      benchmarkVersion: "semantic-merge-v1",
+      expectedCalls: plan.totalCalls,
+      completedCalls: results.reduce((total, result) => total + result.callsAttempted, 0),
+      plan: {
+        clouds: plan.clouds,
+        callsPerStrategy: plan.callsPerStrategy,
+        totalCalls: plan.totalCalls,
+      },
+      results,
+    });
+  }
+  return results;
 }
 
 function printResult(result: StrategyEvaluationResult): void {
@@ -416,16 +508,17 @@ async function main(): Promise<void> {
   const data = await loadRunnerData(options);
   const plan = planEvaluationCalls(data.imported.acceptedMergeBenchmarkCases, data.queue, options.strategy, data.annotatedCases);
   if (options.mode === "dry-run") {
+    if (options.resultsPath) await preflightResultsPath(options.resultsPath);
     console.log(renderDryRun(plan, options.strategy));
     return;
   }
-  const results: StrategyEvaluationResult[] = [];
-  for (const strategy of selectedStrategies(options.strategy)) {
-    const result = await evaluateStrategy(strategy, plan.entries, data.annotatedCases);
-    results.push(result);
-    printResult(result);
-  }
-  if (options.resultsPath) await writeResults(options.resultsPath, { benchmarkVersion: "semantic-merge-v1", plan: { clouds: plan.clouds, callsPerStrategy: plan.callsPerStrategy, totalCalls: plan.totalCalls }, results });
+  const results = await runNetworkEvaluation(
+    plan,
+    data.annotatedCases,
+    options.strategy,
+    options.resultsPath,
+  );
+  for (const result of results) printResult(result);
   console.log(`\nNETWORK_EVALUATION_COMPLETE=${results.every((result) => result.providerFailures === 0) ? "true" : "false"}`);
 }
 
