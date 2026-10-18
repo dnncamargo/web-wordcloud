@@ -16,6 +16,7 @@ export type SemanticMergeLabel =
   | "equivalent"
   | "related_but_distinct"
   | "general_vs_specific"
+  | "unrelated"
   | "administrative_merge"
   | "uncertain";
 export type AnnotationConfidence = "high" | "medium" | "low";
@@ -211,6 +212,7 @@ const LABELS = new Set<SemanticMergeLabel>([
   "equivalent",
   "related_but_distinct",
   "general_vs_specific",
+  "unrelated",
   "administrative_merge",
   "uncertain",
 ]);

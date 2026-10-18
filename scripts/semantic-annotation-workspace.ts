@@ -31,6 +31,16 @@ export type AnnotationStore = Readonly<{
 }>;
 
 export type AnnotationReviewFilter = "all" | "pending" | "reviewed";
+export type AnnotationLabelFilter = "all" | SemanticMergeLabel;
+
+export const SEMANTIC_LABEL_UI = [
+  { value: "equivalent", title: "Equivalentes", description: "Expressam essencialmente a mesma proposta." },
+  { value: "related_but_distinct", title: "Relacionadas, mas distintas", description: "Compartilham relação temática, mas são propostas diferentes." },
+  { value: "general_vs_specific", title: "Geral e específica", description: "Uma ideia abrange, concretiza ou exemplifica a outra." },
+  { value: "unrelated", title: "Não relacionadas", description: "Não há relação semântica relevante no contexto da pergunta." },
+  { value: "administrative_merge", title: "Mesclagem administrativa", description: "Decisão contextual de organização; não prova equivalência semântica." },
+  { value: "uncertain", title: "Incerto", description: "As evidências não permitem decidir com segurança." },
+] as const;
 
 export class SemanticAnnotationWorkspaceError extends Error {
   constructor(message: string) {
@@ -80,6 +90,13 @@ export function createEmptyAnnotationStore(fingerprint: string): AnnotationStore
     updatedAt: null,
   };
 }
+
+export type AnnotationRecordChanges = Readonly<
+  Partial<Pick<
+    SemanticAnnotationRecord,
+    "humanLabel" | "confidence" | "administrativeDecision" | "adjudicationStatus"
+  >>
+>;
 
 export function parseAnnotationStore(
   value: unknown,
@@ -140,6 +157,21 @@ export function serializeAnnotationStore(store: AnnotationStore): string {
   return `${JSON.stringify(normalized, null, 2)}\n`;
 }
 
+export function replaceAnnotationRecord(
+  records: readonly SemanticAnnotationRecord[],
+  caseId: string,
+  changes: AnnotationRecordChanges,
+): readonly SemanticAnnotationRecord[] {
+  const existing = records.find((record) => record.caseId === caseId);
+  if (!existing) {
+    throw new SemanticAnnotationWorkspaceError("Annotation case is not present in the store.");
+  }
+  return consolidateAnnotationRecords([
+    ...records.filter((record) => record.caseId !== caseId),
+    { ...existing, ...changes },
+  ]);
+}
+
 async function readAnnotationStore(
   path: string,
   expectedSaltFingerprint: string,
@@ -187,12 +219,14 @@ export function filterAnnotationQueue(
   cloudPseudonym: string | "all",
   reviewFilter: AnnotationReviewFilter,
   annotations: readonly SemanticAnnotationRecord[],
+  labelFilter: AnnotationLabelFilter = "all",
 ): readonly SemanticMergeAnnotationQueue["items"][number][] {
   const byCase = new Map(annotations.map((annotation) => [annotation.caseId, annotation]));
   return queue.items.filter((item) => {
     if (cloudPseudonym !== "all" && item.cloudPseudonym !== cloudPseudonym) return false;
-    if (reviewFilter === "all") return true;
     const annotation = byCase.get(item.caseId);
+    if (labelFilter !== "all" && annotation?.humanLabel !== labelFilter) return false;
+    if (reviewFilter === "all") return true;
     const reviewed = annotation !== undefined && annotation.adjudicationStatus !== "unadjudicated";
     return reviewFilter === "reviewed" ? reviewed : !reviewed;
   });
@@ -215,10 +249,10 @@ export function renderAnnotationWorkspaceHtml(): string {
 <body><main>
 <h1>Semantic Merge Annotation Workspace</h1>
 <p class="muted">Experimental local workspace. Decisions are saved explicitly outside the repository.</p>
-<div class="toolbar"><label>Nuvem <select id="cloudFilter"><option value="all">Todas</option></select></label><label>Estado <select id="reviewFilter"><option value="all">Todos</option><option value="pending">Pendentes</option><option value="reviewed">Revisados</option></select></label><span class="spacer"></span><span id="progress" class="muted"></span></div>
+<div class="toolbar"><label>Nuvem <select id="cloudFilter"><option value="all">Todas</option></select></label><label>Estado <select id="reviewFilter"><option value="all">Todos</option><option value="pending">Pendentes</option><option value="reviewed">Revisados</option></select></label><label>Classificação atual <select id="labelFilter"><option value="all">Todas</option><option value="related_but_distinct">Revisar: Relacionadas, mas distintas</option><option value="equivalent">Equivalentes</option><option value="general_vs_specific">Geral e específica</option><option value="unrelated">Não relacionadas</option><option value="administrative_merge">Mesclagem administrativa</option><option value="uncertain">Incerto</option></select></label><span class="spacer"></span><span id="progress" class="muted"></span></div>
 <div id="cloudProgress" class="muted"></div>
 <section class="card"><div id="question" class="muted"></div><div class="grid"><div><strong>Ideia 1</strong><div id="firstText" class="idea"></div></div><div><strong>Ideia 2</strong><div id="secondText" class="idea"></div></div></div></section>
-<section class="card"><div class="toolbar"><label>Classificação <select id="label"><option value="equivalent">equivalent</option><option value="related_but_distinct">related_but_distinct</option><option value="general_vs_specific">general_vs_specific</option><option value="administrative_merge">administrative_merge</option><option value="uncertain">uncertain</option></select></label><label>Confiança <select id="confidence"><option value="high">high</option><option value="medium">medium</option><option value="low">low</option></select></label></div><div class="toolbar" style="margin-top:12px"><label>Adjudicação <select id="adjudication"><option value="unadjudicated">unadjudicated</option><option value="agreed">agreed</option><option value="adjudicated">adjudicated</option></select></label><label>Decisão administrativa <select id="administrative"><option value="not_recorded">not_recorded</option><option value="merge">merge</option><option value="keep_separate">keep_separate</option></select></label></div></section>
+<section class="card"><div class="toolbar"><label>Classificação <select id="label"><option value="equivalent">Equivalentes</option><option value="related_but_distinct">Relacionadas, mas distintas</option><option value="general_vs_specific">Geral e específica</option><option value="unrelated">Não relacionadas</option><option value="administrative_merge">Mesclagem administrativa</option><option value="uncertain">Incerto</option></select></label><label>Confiança <select id="confidence"><option value="high">Alta</option><option value="medium">Média</option><option value="low">Baixa</option></select></label></div><div id="labelDescription" class="muted" style="margin-top:8px"></div><div class="toolbar" style="margin-top:12px"><label>Adjudicação <select id="adjudication"><option value="unadjudicated">Não adjudicado</option><option value="agreed">Concordante</option><option value="adjudicated">Adjudicado</option></select></label><label>Decisão administrativa <select id="administrative"><option value="not_recorded">Não registrada</option><option value="merge">Mesclar</option><option value="keep_separate">Manter separadas</option></select></label></div></section>
 <div class="actions" style="margin-top:18px"><button id="previous">Anterior</button><button id="save" class="primary">Salvar decisão</button><button id="next">Próximo</button><span id="status" class="muted"></span></div>
 </main>
 <script>
@@ -230,10 +264,12 @@ export function renderAnnotationWorkspaceHtml(): string {
   const refresh = () => {
     const cloud = byId("cloudFilter").value;
     const review = byId("reviewFilter").value;
+    const labelFilter = byId("labelFilter").value;
     state.filtered = state.data.items.filter((item) => {
       if (cloud !== "all" && item.cloudPseudonym !== cloud) return false;
-      if (review === "all") return true;
       const annotation = annotationFor(item.caseId);
+      if (labelFilter !== "all" && annotation?.humanLabel !== labelFilter) return false;
+      if (review === "all") return true;
       const reviewed = annotation && annotation.adjudicationStatus !== "unadjudicated";
       return review === "reviewed" ? reviewed : !reviewed;
     });
@@ -249,6 +285,8 @@ export function renderAnnotationWorkspaceHtml(): string {
     byId("confidence").value = annotation?.confidence || "medium";
     byId("adjudication").value = annotation?.adjudicationStatus || "unadjudicated";
     byId("administrative").value = annotation?.administrativeDecision || "not_recorded";
+    const labelDescriptions = { equivalent: "Equivalentes: expressam essencialmente a mesma proposta.", related_but_distinct: "Relacionadas, mas distintas: compartilham relação temática, mas são propostas diferentes.", general_vs_specific: "Geral e específica: uma ideia abrange, concretiza ou exemplifica a outra.", unrelated: "Não relacionadas: não há relação semântica relevante no contexto da pergunta.", administrative_merge: "Mesclagem administrativa: decisão contextual de organização; não prova equivalência semântica.", uncertain: "Incerto: as evidências não permitem decidir com segurança." };
+    setText("labelDescription", labelDescriptions[byId("label").value]);
     setText("status", "Caso " + (state.index + 1) + " de " + state.filtered.length);
   };
   const save = async () => {
@@ -257,7 +295,7 @@ export function renderAnnotationWorkspaceHtml(): string {
     if (!response.ok) { setText("status", "Falha ao salvar"); return; }
     state.data.annotations = (await response.json()).annotations; setText("status", "Salvo"); refresh();
   };
-  byId("cloudFilter").addEventListener("change", () => { state.index = 0; refresh(); }); byId("reviewFilter").addEventListener("change", () => { state.index = 0; refresh(); });
+  byId("cloudFilter").addEventListener("change", () => { state.index = 0; refresh(); }); byId("reviewFilter").addEventListener("change", () => { state.index = 0; refresh(); }); byId("labelFilter").addEventListener("change", () => { state.index = 0; refresh(); }); byId("label").addEventListener("change", () => { const descriptions = { equivalent: "Equivalentes: expressam essencialmente a mesma proposta.", related_but_distinct: "Relacionadas, mas distintas: compartilham relação temática, mas são propostas diferentes.", general_vs_specific: "Geral e específica: uma ideia abrange, concretiza ou exemplifica a outra.", unrelated: "Não relacionadas: não há relação semântica relevante no contexto da pergunta.", administrative_merge: "Mesclagem administrativa: decisão contextual de organização; não prova equivalência semântica.", uncertain: "Incerto: as evidências não permitem decidir com segurança." }; setText("labelDescription", descriptions[byId("label").value]); });
   byId("previous").addEventListener("click", () => { state.index = Math.max(0, state.index - 1); refresh(); }); byId("next").addEventListener("click", () => { state.index = Math.min(Math.max(0, state.filtered.length - 1), state.index + 1); refresh(); }); byId("save").addEventListener("click", save);
   fetch("/api/state").then((response) => response.json()).then((data) => { state.data = data; [...new Set(data.items.map((item) => item.cloudPseudonym))].sort().forEach((cloud) => { const option = document.createElement("option"); option.value = cloud; option.textContent = cloud; byId("cloudFilter").appendChild(option); }); refresh(); }).catch(() => setText("status", "Falha ao carregar a fila"));
 })();
@@ -375,10 +413,9 @@ export async function startSemanticAnnotationWorkspace(
           adjudicationStatus: body.adjudicationStatus as Exclude<AdjudicationStatus, "not_applicable">,
           administrativeDecision: body.administrativeDecision as AdministrativeDecision,
         };
-        const annotations = consolidateAnnotationRecords([
-          ...store.annotations.filter((annotation) => annotation.caseId !== caseId),
-          next,
-        ]);
+        const annotations = store.annotations.some((annotation) => annotation.caseId === caseId)
+          ? replaceAnnotationRecord(store.annotations, caseId, next)
+          : consolidateAnnotationRecords([next]);
         const nextStore: AnnotationStore = { ...store, annotations, updatedAt: new Date().toISOString() };
         await writeAnnotationStore(annotationsPath, nextStore);
         store = nextStore;

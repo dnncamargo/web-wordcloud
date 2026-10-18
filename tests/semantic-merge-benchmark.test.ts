@@ -207,6 +207,16 @@ test("rejects a human label without confidence and reports N/A denominators", ()
   assert.equal(report.macro.recall, null);
 });
 
+test("treats unrelated as a negative equivalence label", () => {
+  const unrelated = benchmarkCase("unrelated", "unrelated", "high", "adjudicated");
+  const report = evaluateSemanticMergePredictions([unrelated], [unrelated.pair.identity]);
+  assert.equal(report.truePositives, 0);
+  assert.equal(report.falsePositives, 1);
+  assert.equal(report.falseNegatives, 0);
+  assert.equal(report.precision, 0);
+  assert.equal(report.recall, null);
+});
+
 test("authorized scope rejects exports outside the twelve-cloud partition", () => {
   const exportData = parseCalibrationExport({
     schemaVersion: 1,
