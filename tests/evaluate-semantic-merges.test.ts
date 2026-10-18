@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import {
   DEDICATED_MERGE_INSTRUCTION,
   applyAnnotationsToQueue,
+  anonymizeEvaluationPlan,
   parseRunnerOptions,
   planEvaluationCalls,
   preflightResultsPath,
@@ -14,6 +15,7 @@ import {
   runNetworkEvaluation,
   writeResults,
 } from "../scripts/evaluate-semantic-merges";
+import { evaluateSemanticMergePredictions } from "../scripts/semantic-merge-benchmark";
 import {
   generateAcceptedMergeBenchmarkCases,
   parseCalibrationExport,
@@ -113,6 +115,89 @@ test("dry-run is metadata-only and reports zero calls", () => {
   assert.match(response, /openrouter_calls=0/);
   assert.match(response, /network_enabled=false/);
   assert.equal(DEDICATED_MERGE_INSTRUCTION.includes("untrusted classroom data"), true);
+});
+
+test("anonymization sanitizes both strategies without changing pseudonymous ids", async () => {
+  const plan = anonymizeEvaluationPlan({
+    queue: {
+      benchmarkVersion: "semantic-merge-v1",
+      selectionVersion: "lexical-stratified-v1",
+      targetCount: 0,
+      candidateCount: 0,
+      selectedCount: 0,
+      selectionCriteria: [],
+      tierCounts: { high: 0, medium: 0, low: 0 },
+      cloudCounts: {},
+      items: [],
+    },
+    entries: ["unified", "dedicated"].map((strategy) => ({
+      strategy: strategy as "unified" | "dedicated",
+      cloudPseudonym: "cloud-pseudonym",
+      input: {
+        question: "Como ajudar Alice Silva? alice@example.test",
+        acceptedWords: [{ id: "accepted-pseudonym", text: "Escola Aurora" }],
+        pendingWords: [],
+      },
+      queueCaseCount: 0,
+      inputCharacterCount: 0,
+    })),
+    clouds: 1,
+    callsPerStrategy: 1,
+    totalCalls: 2,
+    acceptedWordCount: 2,
+    inputCharacterCount: 0,
+    scorableCases: 0,
+    positiveAnnotationCount: 0,
+  }, new Map([["Alice Silva", "[PERSON]"]])) ;
+  const observed: string[] = [];
+  await runNetworkEvaluation(plan, [], "both", undefined, async (strategy, entries) => {
+    observed.push(`${strategy}:${entries.map((entry) => `${entry.input.question}|${entry.input.acceptedWords[0]?.text}`).join("|")}`);
+    return {
+      strategy,
+      callsAttempted: entries.length,
+      successfulResponses: entries.length,
+      providerFailures: 0,
+      schemaFailures: 0,
+      transportFailures: 0,
+      failureCodes: {},
+      predictionsOutsideAnnotatedCases: 0,
+      metrics: evaluateSemanticMergePredictions([], []),
+    };
+  });
+  assert.equal(observed.length, 2);
+  assert.equal(observed.every((value) => !value.includes("Alice") && !value.includes("@")).toString(), "true");
+  assert.equal(observed.every((value) => value.includes("[PERSON]") && value.includes("[IDENTIFIER]")).toString(), "true");
+  assert.equal(plan.entries.every((entry) => entry.anonymizationReviewed), true);
+});
+
+test("unresolved anonymization risk blocks the network executor", () => {
+  assert.throws(() => anonymizeEvaluationPlan({
+    queue: {
+      benchmarkVersion: "semantic-merge-v1",
+      selectionVersion: "lexical-stratified-v1",
+      targetCount: 0,
+      candidateCount: 0,
+      selectedCount: 0,
+      selectionCriteria: [],
+      tierCounts: { high: 0, medium: 0, low: 0 },
+      cloudCounts: {},
+      items: [],
+    },
+    entries: [{
+      strategy: "unified",
+      cloudPseudonym: "cloud-pseudonym",
+      input: { question: "Nome: joao", acceptedWords: [], pendingWords: [] },
+      queueCaseCount: 0,
+      inputCharacterCount: 0,
+    }],
+    clouds: 1,
+    callsPerStrategy: 1,
+    totalCalls: 1,
+    acceptedWordCount: 0,
+    inputCharacterCount: 0,
+    scorableCases: 0,
+    positiveAnnotationCount: 0,
+  }), /unresolved identifiable content/);
 });
 
 test("prediction matching is independent of pair order", () => {

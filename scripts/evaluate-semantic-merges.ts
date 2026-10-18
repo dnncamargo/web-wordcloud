@@ -27,6 +27,13 @@ import {
   parseAnnotationStore,
   saltFingerprint,
 } from "./semantic-annotation-workspace";
+import {
+  anonymizeTriageInput,
+  mergeAnonymizationReviews,
+  parseAnonymizationDictionary,
+  type AnonymizationDictionary,
+  type AnonymizationReview,
+} from "./semantic-merge-anonymizer";
 
 export const DEDICATED_MERGE_INSTRUCTION = [
   "Return only the requested JSON object.",
@@ -49,6 +56,7 @@ export type SemanticRunnerOptions = Readonly<{
   corpusPath: string;
   annotationsPath: string;
   saltPath: string;
+  anonymizationDictionaryPath?: string;
   resultsPath?: string;
 }>;
 
@@ -58,6 +66,7 @@ export type EvaluationPlanEntry = Readonly<{
   input: TriageInput;
   queueCaseCount: number;
   inputCharacterCount: number;
+  anonymizationReviewed?: boolean;
 }>;
 
 export type EvaluationPlan = Readonly<{
@@ -70,6 +79,7 @@ export type EvaluationPlan = Readonly<{
   inputCharacterCount: number;
   scorableCases: number;
   positiveAnnotationCount: number;
+  anonymization?: AnonymizationReview;
 }>;
 
 export type ProviderFailureCounts = Readonly<{
@@ -275,6 +285,7 @@ export function parseRunnerOptions(args: readonly string[]): SemanticRunnerOptio
     corpusPath: process.env.SEMANTIC_MERGE_CORPUS_PATH ?? "",
     annotationsPath: process.env.SEMANTIC_MERGE_ANNOTATIONS_PATH ?? "",
     saltPath: process.env.SEMANTIC_MERGE_SALT_PATH ?? "",
+    anonymizationDictionaryPath: process.env.SEMANTIC_MERGE_ANONYMIZATION_DICTIONARY_PATH,
     resultsPath,
   };
 }
@@ -305,6 +316,9 @@ export function renderDryRun(plan: EvaluationPlan, selection: StrategySelection)
     `provider_require_parameters=${OPENROUTER_TRIAGE_REQUEST_OPTIONS.provider.require_parameters}`,
     `accepted_words_in_inputs=${plan.acceptedWordCount}`,
     `input_character_count=${plan.inputCharacterCount}`,
+    `anonymization_review_complete=${plan.anonymization?.reviewComplete ?? false}`,
+    `anonymization_replacements=${plan.anonymization?.replacementCount ?? 0}`,
+    `anonymization_unresolved_risks=${plan.anonymization?.unresolvedRiskCount ?? 0}`,
     "openrouter_calls=0",
     "network_enabled=false",
     "results_write=false",
@@ -339,6 +353,9 @@ export async function evaluateStrategy(
   const counts = { providerFailures: 0, schemaFailures: 0, transportFailures: 0, failureCodes: new Map<string, number>() };
   let successfulResponses = 0;
   const strategyEntries = entries.filter((entry) => entry.strategy === strategy);
+  if (strategyEntries.some((entry) => entry.anonymizationReviewed !== true)) {
+    throw new SemanticMergeEvaluationError("Network evaluation requires reviewed anonymized inputs.");
+  }
   for (const entry of strategyEntries) {
     try {
       const response = strategy === "unified"
@@ -385,6 +402,49 @@ async function loadRunnerData(options: SemanticRunnerOptions) {
   const queue = selectSemanticMergeAnnotationQueue(imported.acceptedMergeBenchmarkCases, 60);
   const annotatedCases = applyAnnotationsToQueue(imported.acceptedMergeBenchmarkCases, queue, annotationStore.annotations);
   return { imported, queue, annotatedCases };
+}
+
+async function loadAnonymizationDictionary(
+  path: string | undefined,
+): Promise<AnonymizationDictionary> {
+  if (!path) return new Map();
+  const dictionaryPath = requireExternalPath(path, "Anonymization dictionary path");
+  try {
+    return parseAnonymizationDictionary(JSON.parse(await readFile(dictionaryPath, "utf8")));
+  } catch (error) {
+    if (error instanceof SemanticMergeEvaluationError) throw error;
+    if (error instanceof Error && error.name === "AnonymizationError") {
+      throw new SemanticMergeEvaluationError(error.message);
+    }
+    throw new SemanticMergeEvaluationError("Anonymization dictionary cannot be read.");
+  }
+}
+
+export function anonymizeEvaluationPlan(
+  plan: EvaluationPlan,
+  dictionary: AnonymizationDictionary = new Map(),
+): EvaluationPlan {
+  const reviews: AnonymizationReview[] = [];
+  const entries = plan.entries.map((entry) => {
+    const result = anonymizeTriageInput(entry.input, dictionary);
+    reviews.push(result.review);
+    return {
+      ...entry,
+      input: result.input,
+      inputCharacterCount: inputCharacterCount(result.input),
+      anonymizationReviewed: result.review.reviewComplete,
+    };
+  });
+  const anonymization = mergeAnonymizationReviews(reviews);
+  if (!anonymization.reviewComplete) {
+    throw new SemanticMergeEvaluationError("Anonymization review found unresolved identifiable content.");
+  }
+  return {
+    ...plan,
+    entries,
+    inputCharacterCount: entries.reduce((total, entry) => total + entry.inputCharacterCount, 0),
+    anonymization,
+  };
 }
 
 export async function writeResults(path: string, value: unknown): Promise<void> {
@@ -474,6 +534,9 @@ export async function runNetworkEvaluation(
   preflight: typeof preflightResultsPath = preflightResultsPath,
 ): Promise<readonly StrategyEvaluationResult[]> {
   if (resultsPath) await preflight(resultsPath);
+  if (plan.entries.length > 0 && (!plan.anonymization || !plan.anonymization.reviewComplete)) {
+    throw new SemanticMergeEvaluationError("Network evaluation requires reviewed anonymized inputs.");
+  }
   printNetworkWarning();
   const results: StrategyEvaluationResult[] = [];
   for (const strategy of selectedStrategies(selection)) {
@@ -525,7 +588,8 @@ function printResult(result: StrategyEvaluationResult): void {
 async function main(): Promise<void> {
   const options = parseRunnerOptions(process.argv.slice(2));
   const data = await loadRunnerData(options);
-  const plan = planEvaluationCalls(data.imported.acceptedMergeBenchmarkCases, data.queue, options.strategy, data.annotatedCases);
+  const rawPlan = planEvaluationCalls(data.imported.acceptedMergeBenchmarkCases, data.queue, options.strategy, data.annotatedCases);
+  const plan = anonymizeEvaluationPlan(rawPlan, await loadAnonymizationDictionary(options.anonymizationDictionaryPath));
   if (options.mode === "dry-run") {
     if (options.resultsPath) await preflightResultsPath(options.resultsPath);
     console.log(renderDryRun(plan, options.strategy));
