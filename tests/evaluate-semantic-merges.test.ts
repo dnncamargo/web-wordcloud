@@ -5,6 +5,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
   DEDICATED_MERGE_INSTRUCTION,
+  assertOpenRouterApiKey,
+  buildResultsDocument,
+  evaluationRunStatus,
   applyAnnotationsToQueue,
   anonymizeEvaluationPlan,
   parseRunnerOptions,
@@ -43,6 +46,49 @@ test("runner requires an explicit mode and strategy", () => {
   assert.deepEqual(parseRunnerOptions(["--dry-run", "--strategy", "both"]).mode, "dry-run");
   assert.deepEqual(parseRunnerOptions(["--dry-run", "--strategy", "both"]).strategy, "both");
   assert.throws(() => parseRunnerOptions(["--allow-network", "--strategy", "unknown"]), /Strategy/);
+});
+
+test("network evaluation fails before the executor when the API key is absent", async () => {
+  const originalApiKey = process.env.OPENROUTER_API_KEY;
+  delete process.env.OPENROUTER_API_KEY;
+  try {
+    assert.throws(() => assertOpenRouterApiKey(), /OPENROUTER_API_KEY is required/);
+    let executorCalls = 0;
+    await assert.rejects(
+      runNetworkEvaluation({
+        queue: { benchmarkVersion: "semantic-merge-v1", selectionVersion: "lexical-stratified-v1", targetCount: 0, candidateCount: 0, selectedCount: 0, selectionCriteria: [], tierCounts: { high: 0, medium: 0, low: 0 }, cloudCounts: {}, items: [] },
+        entries: [],
+        clouds: 0,
+        callsPerStrategy: 0,
+        totalCalls: 0,
+        acceptedWordCount: 0,
+        inputCharacterCount: 0,
+        scorableCases: 0,
+        positiveAnnotationCount: 0,
+      },
+      [],
+      "unified",
+      undefined,
+      async () => { executorCalls += 1; throw new Error("executor must not run"); },
+    ),
+      /OPENROUTER_API_KEY is required/,
+    );
+    assert.equal(executorCalls, 0);
+  } finally {
+    if (originalApiKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = originalApiKey;
+  }
+});
+
+test("result status distinguishes complete, partial, and fully failed runs", () => {
+  assert.equal(evaluationRunStatus(4, 4, 4), "complete");
+  assert.equal(evaluationRunStatus(4, 4, 2), "partial");
+  assert.equal(evaluationRunStatus(4, 4, 0), "failed");
+  const plan = { totalCalls: 4, clouds: 2, callsPerStrategy: 2 } as unknown as Parameters<typeof buildResultsDocument>[0];
+  const result = (successfulResponses: number) => ({ callsAttempted: 4, successfulResponses } as unknown as Parameters<typeof buildResultsDocument>[1][number]);
+  assert.equal(buildResultsDocument(plan, [result(0)]).status, "failed");
+  assert.equal(buildResultsDocument(plan, [result(2)]).status, "partial");
+  assert.equal(buildResultsDocument(plan, [result(4)]).status, "complete");
 });
 
 test("plans one call per represented cloud and two strategies double the plan", () => {

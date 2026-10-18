@@ -10,7 +10,7 @@ import {
   type TriageInput,
   type TriageResponse,
 } from "../lib/ai/openRouterTriage";
-import { getOpenRouterModel } from "../lib/ai/openRouterConfig";
+import { getOpenRouterApiKey, getOpenRouterModel } from "../lib/ai/openRouterConfig";
 import { validateTriageInput } from "../lib/ai/triage-contract";
 import {
   evaluateSemanticMergePredictions,
@@ -98,6 +98,7 @@ export type ProviderFailureCounts = Readonly<{
 
 export type StrategyEvaluationResult = Readonly<{
   strategy: MergeEvaluationStrategy;
+  status: EvaluationRunStatus;
   callsAttempted: number;
   successfulResponses: number;
   providerFailures: number;
@@ -106,6 +107,21 @@ export type StrategyEvaluationResult = Readonly<{
   failureCodes: Readonly<Record<string, number>>;
   predictionsOutsideAnnotatedCases: number;
   metrics: SemanticMergeBenchmarkReport;
+}>;
+
+export type EvaluationRunStatus = "complete" | "partial" | "failed";
+
+export type SemanticEvaluationResultsDocument = Readonly<{
+  status: EvaluationRunStatus;
+  benchmarkVersion: "semantic-merge-v1";
+  expectedCalls: number;
+  attemptedCalls: number;
+  successfulResponses: number;
+  failedCalls: number;
+  /** Kept as the historical attempted-call count for existing readers. */
+  completedCalls: number;
+  plan: Readonly<{ clouds: number; callsPerStrategy: number; totalCalls: number }>;
+  results: readonly StrategyEvaluationResult[];
 }>;
 
 export type ResultsPreflight = Readonly<{
@@ -117,6 +133,23 @@ export class SemanticMergeEvaluationError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "SemanticMergeEvaluationError";
+  }
+}
+
+export function evaluationRunStatus(
+  expectedCalls: number,
+  attemptedCalls: number,
+  successfulResponses: number,
+): EvaluationRunStatus {
+  const failedCalls = Math.max(0, attemptedCalls - successfulResponses);
+  if (expectedCalls === attemptedCalls && failedCalls === 0 && successfulResponses === expectedCalls) return "complete";
+  if (successfulResponses === 0) return "failed";
+  return "partial";
+}
+
+export function assertOpenRouterApiKey(): void {
+  if (!getOpenRouterApiKey()) {
+    throw new SemanticMergeEvaluationError("OPENROUTER_API_KEY is required for network evaluation.");
   }
 }
 
@@ -380,9 +413,12 @@ export async function evaluateStrategy(
     }
   }
   const metrics = evaluateSemanticMergePredictions(benchmarkCases, predictions);
+  const callsAttempted = strategyEntries.length;
+  const status = evaluationRunStatus(callsAttempted, callsAttempted, successfulResponses);
   return {
     strategy,
-    callsAttempted: strategyEntries.length,
+    status,
+    callsAttempted,
     successfulResponses,
     providerFailures: counts.providerFailures,
     schemaFailures: counts.schemaFailures,
@@ -390,6 +426,30 @@ export async function evaluateStrategy(
     failureCodes: Object.fromEntries(counts.failureCodes),
     predictionsOutsideAnnotatedCases: metrics.ignoredUnannotatedPredictions,
     metrics,
+  };
+}
+
+export function buildResultsDocument(
+  plan: EvaluationPlan,
+  results: readonly StrategyEvaluationResult[],
+): SemanticEvaluationResultsDocument {
+  const attemptedCalls = results.reduce((total, result) => total + result.callsAttempted, 0);
+  const successfulResponses = results.reduce((total, result) => total + result.successfulResponses, 0);
+  const failedCalls = Math.max(0, attemptedCalls - successfulResponses);
+  return {
+    status: evaluationRunStatus(plan.totalCalls, attemptedCalls, successfulResponses),
+    benchmarkVersion: "semantic-merge-v1",
+    expectedCalls: plan.totalCalls,
+    attemptedCalls,
+    successfulResponses,
+    failedCalls,
+    completedCalls: attemptedCalls,
+    plan: {
+      clouds: plan.clouds,
+      callsPerStrategy: plan.callsPerStrategy,
+      totalCalls: plan.totalCalls,
+    },
+    results,
   };
 }
 
@@ -597,24 +657,14 @@ export async function runNetworkEvaluation(
   if (plan.entries.length > 0 && (!plan.anonymization || plan.anonymization.approvalComplete !== true)) {
     throw new SemanticMergeEvaluationError("Network evaluation requires reviewed anonymized inputs.");
   }
+  assertOpenRouterApiKey();
   printNetworkWarning();
   const results: StrategyEvaluationResult[] = [];
   for (const strategy of selectedStrategies(selection)) {
     results.push(await evaluate(strategy, plan.entries, benchmarkCases));
   }
   if (resultsPath) {
-    await writeResults(resultsPath, {
-      status: "complete",
-      benchmarkVersion: "semantic-merge-v1",
-      expectedCalls: plan.totalCalls,
-      completedCalls: results.reduce((total, result) => total + result.callsAttempted, 0),
-      plan: {
-        clouds: plan.clouds,
-        callsPerStrategy: plan.callsPerStrategy,
-        totalCalls: plan.totalCalls,
-      },
-      results,
-    });
+    await writeResults(resultsPath, buildResultsDocument(plan, results));
   }
   return results;
 }
@@ -622,6 +672,7 @@ export async function runNetworkEvaluation(
 function printResult(result: StrategyEvaluationResult): void {
   const metrics = result.metrics;
   console.log(`\nSTRATEGY ${result.strategy}`);
+  console.log(`status=${result.status}`);
   console.log(`calls_attempted=${result.callsAttempted}`);
   console.log(`successful_responses=${result.successfulResponses}`);
   console.log(`provider_failures=${result.providerFailures}`);
@@ -647,6 +698,7 @@ function printResult(result: StrategyEvaluationResult): void {
 
 async function main(): Promise<void> {
   const options = parseRunnerOptions(process.argv.slice(2));
+  if (options.mode === "allow-network") assertOpenRouterApiKey();
   const data = await loadRunnerData(options);
   const rawPlan = planEvaluationCalls(data.imported.acceptedMergeBenchmarkCases, data.queue, options.strategy, data.annotatedCases);
   const dictionary = await loadAnonymizationDictionary(options.anonymizationDictionaryPath);
@@ -668,7 +720,13 @@ async function main(): Promise<void> {
     options.resultsPath,
   );
   for (const result of results) printResult(result);
-  console.log(`\nNETWORK_EVALUATION_COMPLETE=${results.every((result) => result.providerFailures === 0) ? "true" : "false"}`);
+  const status = evaluationRunStatus(
+    plan.totalCalls,
+    results.reduce((total, result) => total + result.callsAttempted, 0),
+    results.reduce((total, result) => total + result.successfulResponses, 0),
+  );
+  console.log(`\nNETWORK_EVALUATION_STATUS=${status}`);
+  console.log(`NETWORK_EVALUATION_COMPLETE=${status === "complete" ? "true" : "false"}`);
 }
 
 if (isMainModule()) {
