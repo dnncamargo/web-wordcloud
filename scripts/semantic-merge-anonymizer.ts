@@ -42,6 +42,9 @@ export type AnonymizationApprovalStore = Readonly<{
   corpusVersion: string;
   rulesFingerprint: string;
   approvals: readonly AnonymizationApproval[];
+  approvalMode?: "individual" | "operator-batch";
+  declarationFingerprint?: string;
+  declaredItemCount?: number;
 }>;
 
 export class AnonymizationError extends Error {
@@ -238,6 +241,50 @@ export function applyAnonymizationApprovals(
       pendingApprovalCount,
       approvalComplete: pendingApprovalCount === 0,
     },
+  };
+}
+
+export function createBatchApprovalStore(
+  items: readonly AnonymizationReviewItem[],
+  review: AnonymizationReview,
+  confirmedReviewedAll: boolean,
+  dictionary: AnonymizationDictionary = new Map(),
+): AnonymizationApprovalStore {
+  if (!confirmedReviewedAll) throw new AnonymizationError("Explicit batch review confirmation is required.");
+  if (!review.reviewComplete || review.unresolvedRiskCount !== 0) {
+    throw new AnonymizationError("Unresolved anonymization risks block batch approval.");
+  }
+  if (!review.corpusVersion || !review.rulesFingerprint || items.length === 0) {
+    throw new AnonymizationError("The anonymization review is incomplete.");
+  }
+  const uniqueIds = new Set(items.map((item) => item.reviewId));
+  if (uniqueIds.size !== items.length || items.some((item) => !validateApprovedAnonymizedText(item.anonymizedText, dictionary))) {
+    throw new AnonymizationError("The anonymization review items are inconsistent.");
+  }
+  const declarationFingerprint = fingerprint(JSON.stringify({
+    corpusVersion: review.corpusVersion,
+    rulesFingerprint: review.rulesFingerprint,
+    items: items.map((item) => ({
+      reviewId: item.reviewId,
+      sourceTextFingerprint: item.sourceTextFingerprint,
+      anonymizedTextFingerprint: item.anonymizedTextFingerprint,
+    })),
+  }));
+  return {
+    version: "semantic-merge-anonymization-approval-v1",
+    corpusVersion: review.corpusVersion,
+    rulesFingerprint: review.rulesFingerprint,
+    approvalMode: "operator-batch",
+    declarationFingerprint,
+    declaredItemCount: items.length,
+    approvals: items.map((item) => ({
+      reviewId: item.reviewId,
+      sourceTextFingerprint: item.sourceTextFingerprint,
+      baseAnonymizedTextFingerprint: item.anonymizedTextFingerprint,
+      approvedText: item.anonymizedText,
+      approvedTextFingerprint: item.anonymizedTextFingerprint,
+      status: "approved" as const,
+    })),
   };
 }
 
