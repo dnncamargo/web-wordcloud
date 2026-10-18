@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import test from "node:test";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -185,11 +185,71 @@ test("preflight failures prevent the network executor from being called", async 
   assert.equal(calls, 0);
 });
 
+test("hard-link preflight failure removes probes and prevents the executor", async () => {
+  const root = await mkdtemp(join(tmpdir(), "semantic-merge-runner-"));
+  try {
+    const target = join(root, "results.json");
+    await assert.rejects(
+      preflightResultsPath(target, {
+        linkFile: async () => {
+          throw new Error("simulated hard-link failure");
+        },
+      }),
+      /hard links/,
+    );
+    assert.deepEqual((await readdir(root)).sort(), []);
+
+    let calls = 0;
+    const plan = {
+      queue: {
+        benchmarkVersion: "semantic-merge-v1" as const,
+        selectionVersion: "lexical-stratified-v1" as const,
+        targetCount: 0,
+        candidateCount: 0,
+        selectedCount: 0,
+        selectionCriteria: [],
+        tierCounts: { high: 0, medium: 0, low: 0 },
+        cloudCounts: {},
+        items: [],
+      },
+      entries: [],
+      clouds: 0,
+      callsPerStrategy: 0,
+      totalCalls: 0,
+      acceptedWordCount: 0,
+      inputCharacterCount: 0,
+      scorableCases: 0,
+      positiveAnnotationCount: 0,
+    };
+    await assert.rejects(
+      runNetworkEvaluation(
+        plan,
+        [],
+        "unified",
+        target,
+        async () => {
+          calls += 1;
+          throw new Error("network must not run");
+        },
+        async () => {
+          throw new Error("simulated hard-link failure");
+        },
+      ),
+      /simulated hard-link failure/,
+    );
+    assert.equal(calls, 0);
+    assert.deepEqual((await readdir(root)).sort(), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("safe result publication preserves existing output and writes a complete marker", async () => {
   const root = await mkdtemp(join(tmpdir(), "semantic-merge-runner-"));
   try {
     const target = join(root, "results.json");
     await preflightResultsPath(target);
+    assert.deepEqual((await readdir(root)).sort(), []);
     await writeResults(target, { status: "complete", completedCalls: 2 });
     assert.deepEqual(JSON.parse(await readFile(target, "utf8")), { status: "complete", completedCalls: 2 });
     await assert.rejects(writeResults(target, { status: "complete", completedCalls: 99 }), /already exists/);

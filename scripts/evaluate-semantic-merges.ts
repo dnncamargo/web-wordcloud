@@ -401,15 +401,23 @@ export async function writeResults(path: string, value: unknown): Promise<void> 
     throw new SemanticMergeEvaluationError(
       error instanceof Error ? error.message : "Unable to publish evaluation results.",
     );
+  } finally {
+    await unlink(temporary).catch(() => undefined);
   }
-  await unlink(temporary);
 }
 
 function isErrorCode(error: unknown, code: string): boolean {
   return isRecord(error) && error.code === code;
 }
 
-export async function preflightResultsPath(path: string): Promise<ResultsPreflight> {
+export type ResultsPreflightDependencies = Readonly<{
+  linkFile?: typeof link;
+}>;
+
+export async function preflightResultsPath(
+  path: string,
+  dependencies: ResultsPreflightDependencies = {},
+): Promise<ResultsPreflight> {
   const targetPath = requireExternalPath(path, "Results path");
   const parentPath = dirname(targetPath);
   let parentStats;
@@ -431,13 +439,23 @@ export async function preflightResultsPath(path: string): Promise<ResultsPreflig
     if (!isErrorCode(error, "ENOENT")) throw error;
   }
   const probe = `${targetPath}.${process.pid}.${randomUUID()}.preflight`;
+  const probeLink = `${probe}.link`;
+  const linkFile = dependencies.linkFile ?? link;
   try {
     await writeFile(probe, "preflight", { encoding: "utf8", flag: "wx" });
-    await unlink(probe);
   } catch {
     await unlink(probe).catch(() => undefined);
     throw new SemanticMergeEvaluationError("Results destination is not writable.");
   }
+  try {
+    await linkFile(probe, probeLink);
+  } catch {
+    await unlink(probeLink).catch(() => undefined);
+    await unlink(probe).catch(() => undefined);
+    throw new SemanticMergeEvaluationError("Results directory does not support hard links.");
+  }
+  await unlink(probeLink).catch(() => undefined);
+  await unlink(probe).catch(() => undefined);
   return { targetPath, parentPath };
 }
 
@@ -453,8 +471,9 @@ export async function runNetworkEvaluation(
   selection: StrategySelection,
   resultsPath: string | undefined,
   evaluate: typeof evaluateStrategy = evaluateStrategy,
+  preflight: typeof preflightResultsPath = preflightResultsPath,
 ): Promise<readonly StrategyEvaluationResult[]> {
-  if (resultsPath) await preflightResultsPath(resultsPath);
+  if (resultsPath) await preflight(resultsPath);
   printNetworkWarning();
   const results: StrategyEvaluationResult[] = [];
   for (const strategy of selectedStrategies(selection)) {
