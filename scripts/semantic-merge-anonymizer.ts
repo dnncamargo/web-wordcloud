@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { TriageInput } from "../lib/ai/openRouterTriage";
 
 export type AnonymizationDictionary = ReadonlyMap<string, string>;
+export const ANONYMIZATION_RULES_VERSION = "semantic-merge-anonymizer-v3" as const;
 
 export type AnonymizationReview = Readonly<{
   dictionaryEntries: number;
@@ -59,7 +60,7 @@ function fingerprint(value: string): string {
 }
 
 export function anonymizationRulesFingerprint(dictionary: AnonymizationDictionary): string {
-  return fingerprint(JSON.stringify({ version: "semantic-merge-anonymizer-v2", dictionary: [...dictionary] }));
+  return fingerprint(JSON.stringify({ version: ANONYMIZATION_RULES_VERSION, dictionary: [...dictionary].sort(([first], [second]) => first.localeCompare(second)) }));
 }
 
 export function corpusVersionForInputs(

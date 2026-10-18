@@ -62,6 +62,23 @@ test("all items require current explicit approvals and stale approvals remain pe
   assert.equal(stale.review.approvalComplete, false);
 });
 
+test("rules version changes invalidate prior approvals without reusing them", () => {
+  const entries = syntheticEntries();
+  const dictionary = parseAnonymizationDictionary({ "Alice Silva": "[PERSON]", "Escola Aurora": "[SCHOOL]", "Rua das Flores": "[PLACE]" });
+  const prepared = buildAnonymizationReview(entries, dictionary);
+  const review = { ...prepared.review, corpusVersion: corpusVersionForInputs(entries), rulesFingerprint: anonymizationRulesFingerprint(dictionary) };
+  const legacy = applyAnonymizationApprovals(entries, prepared.items, review, {
+    version: "semantic-merge-anonymization-approval-v1",
+    corpusVersion: review.corpusVersion!,
+    rulesFingerprint: "semantic-merge-anonymizer-v2-legacy",
+    approvals: prepared.items.map((item) => ({ reviewId: item.reviewId, sourceTextFingerprint: item.sourceTextFingerprint, baseAnonymizedTextFingerprint: item.anonymizedTextFingerprint, approvedText: item.anonymizedText, approvedTextFingerprint: createHash("sha256").update(item.anonymizedText).digest("hex"), status: "approved" as const })),
+  }, dictionary);
+  assert.equal(legacy.review.approvalComplete, false);
+  assert.equal(legacy.review.approvedItemCount, 0);
+  assert.equal(legacy.review.pendingApprovalCount, prepared.items.length);
+  assert.notEqual(review.rulesFingerprint, "semantic-merge-anonymizer-v2-legacy");
+});
+
 test("local review server persists only sanitized approval text", async () => {
   const root = await mkdtemp(join(tmpdir(), "semantic-anonymization-review-"));
   let server: Awaited<ReturnType<typeof startAnonymizationReviewServer>> | undefined;
