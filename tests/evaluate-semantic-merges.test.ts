@@ -15,7 +15,6 @@ import {
   runNetworkEvaluation,
   writeResults,
 } from "../scripts/evaluate-semantic-merges";
-import { evaluateSemanticMergePredictions } from "../scripts/semantic-merge-benchmark";
 import {
   generateAcceptedMergeBenchmarkCases,
   parseCalibrationExport,
@@ -117,7 +116,7 @@ test("dry-run is metadata-only and reports zero calls", () => {
   assert.equal(DEDICATED_MERGE_INSTRUCTION.includes("untrusted classroom data"), true);
 });
 
-test("anonymization sanitizes both strategies without changing pseudonymous ids", async () => {
+test("anonymization sanitizes both strategies without changing pseudonymous ids", () => {
   const plan = anonymizeEvaluationPlan({
     queue: {
       benchmarkVersion: "semantic-merge-v1",
@@ -149,25 +148,22 @@ test("anonymization sanitizes both strategies without changing pseudonymous ids"
     scorableCases: 0,
     positiveAnnotationCount: 0,
   }, new Map([["Alice Silva", "[PERSON]"]])) ;
-  const observed: string[] = [];
-  await runNetworkEvaluation(plan, [], "both", undefined, async (strategy, entries) => {
-    observed.push(`${strategy}:${entries.map((entry) => `${entry.input.question}|${entry.input.acceptedWords[0]?.text}`).join("|")}`);
-    return {
-      strategy,
-      callsAttempted: entries.length,
-      successfulResponses: entries.length,
-      providerFailures: 0,
-      schemaFailures: 0,
-      transportFailures: 0,
-      failureCodes: {},
-      predictionsOutsideAnnotatedCases: 0,
-      metrics: evaluateSemanticMergePredictions([], []),
-    };
-  });
-  assert.equal(observed.length, 2);
-  assert.equal(observed.every((value) => !value.includes("Alice") && !value.includes("@")).toString(), "true");
-  assert.equal(observed.every((value) => value.includes("[PERSON]") && value.includes("[IDENTIFIER]")).toString(), "true");
+  assert.equal(plan.entries.every((entry) => !entry.input.question.includes("Alice") && !entry.input.question.includes("@")), true);
+  assert.equal(plan.entries.every((entry) => entry.input.question.includes("[PERSON]")), true);
+  assert.equal(plan.entries.every((entry) => entry.input.acceptedWords[0]?.text.includes("[IDENTIFIER]")), true);
+  assert.equal(plan.entries.every((entry) => entry.input.acceptedWords[0]?.id === "accepted-pseudonym"), true);
   assert.equal(plan.entries.every((entry) => entry.anonymizationReviewed), true);
+});
+
+test("network executor is blocked until every anonymization item is approved", async () => {
+  const plan = anonymizeEvaluationPlan({
+    queue: { benchmarkVersion: "semantic-merge-v1", selectionVersion: "lexical-stratified-v1", targetCount: 0, candidateCount: 0, selectedCount: 0, selectionCriteria: [], tierCounts: { high: 0, medium: 0, low: 0 }, cloudCounts: {}, items: [] },
+    entries: [{ strategy: "unified", cloudPseudonym: "cloud", input: { question: "Nome: Alice", acceptedWords: [], pendingWords: [] }, queueCaseCount: 0, inputCharacterCount: 0 }],
+    clouds: 1, callsPerStrategy: 1, totalCalls: 1, acceptedWordCount: 0, inputCharacterCount: 0, scorableCases: 0, positiveAnnotationCount: 0,
+  });
+  let calls = 0;
+  await assert.rejects(runNetworkEvaluation(plan, [], "unified", undefined, async () => { calls += 1; throw new Error("must not execute"); }), /reviewed anonymized inputs/);
+  assert.equal(calls, 0);
 });
 
 test("unresolved anonymization risk blocks the network executor", () => {

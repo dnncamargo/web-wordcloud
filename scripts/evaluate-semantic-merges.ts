@@ -28,9 +28,13 @@ import {
   saltFingerprint,
 } from "./semantic-annotation-workspace";
 import {
-  anonymizeTriageInput,
-  mergeAnonymizationReviews,
+  applyAnonymizationApprovals,
+  buildAnonymizationReview,
+  corpusVersionForInputs,
+  anonymizationRulesFingerprint,
   parseAnonymizationDictionary,
+  type AnonymizationApprovalStore,
+  type AnonymizationReviewItem,
   type AnonymizationDictionary,
   type AnonymizationReview,
 } from "./semantic-merge-anonymizer";
@@ -57,6 +61,7 @@ export type SemanticRunnerOptions = Readonly<{
   annotationsPath: string;
   saltPath: string;
   anonymizationDictionaryPath?: string;
+  anonymizationApprovalsPath?: string;
   resultsPath?: string;
 }>;
 
@@ -80,6 +85,7 @@ export type EvaluationPlan = Readonly<{
   scorableCases: number;
   positiveAnnotationCount: number;
   anonymization?: AnonymizationReview;
+  anonymizationItems?: readonly AnonymizationReviewItem[];
 }>;
 
 export type ProviderFailureCounts = Readonly<{
@@ -117,7 +123,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function requireExternalPath(path: string, description: string): string {
+export function requireExternalPath(path: string, description: string): string {
   if (!isAbsolute(path)) {
     throw new SemanticMergeEvaluationError(`${description} must be absolute.`);
   }
@@ -286,6 +292,7 @@ export function parseRunnerOptions(args: readonly string[]): SemanticRunnerOptio
     annotationsPath: process.env.SEMANTIC_MERGE_ANNOTATIONS_PATH ?? "",
     saltPath: process.env.SEMANTIC_MERGE_SALT_PATH ?? "",
     anonymizationDictionaryPath: process.env.SEMANTIC_MERGE_ANONYMIZATION_DICTIONARY_PATH,
+    anonymizationApprovalsPath: process.env.SEMANTIC_MERGE_ANONYMIZATION_APPROVALS_PATH,
     resultsPath,
   };
 }
@@ -319,6 +326,9 @@ export function renderDryRun(plan: EvaluationPlan, selection: StrategySelection)
     `anonymization_review_complete=${plan.anonymization?.reviewComplete ?? false}`,
     `anonymization_replacements=${plan.anonymization?.replacementCount ?? 0}`,
     `anonymization_unresolved_risks=${plan.anonymization?.unresolvedRiskCount ?? 0}`,
+    `anonymization_approval_complete=${plan.anonymization?.approvalComplete ?? false}`,
+    `anonymization_pending_approvals=${plan.anonymization?.pendingApprovalCount ?? 0}`,
+    `anonymization_corpus_version=${plan.anonymization?.corpusVersion ?? "unknown"}`,
     "openrouter_calls=0",
     "network_enabled=false",
     "results_write=false",
@@ -386,7 +396,7 @@ function isMainModule(): boolean {
   return process.argv[1] !== undefined && import.meta.url === pathToFileURL(resolve(process.argv[1])).href;
 }
 
-async function loadRunnerData(options: SemanticRunnerOptions) {
+export async function loadRunnerData(options: SemanticRunnerOptions) {
   if (!options.corpusPath || !options.annotationsPath || !options.saltPath) {
     throw new SemanticMergeEvaluationError("Set the three SEMANTIC_MERGE_* external paths.");
   }
@@ -404,7 +414,7 @@ async function loadRunnerData(options: SemanticRunnerOptions) {
   return { imported, queue, annotatedCases };
 }
 
-async function loadAnonymizationDictionary(
+export async function loadAnonymizationDictionary(
   path: string | undefined,
 ): Promise<AnonymizationDictionary> {
   if (!path) return new Map();
@@ -420,30 +430,81 @@ async function loadAnonymizationDictionary(
   }
 }
 
+export async function loadAnonymizationApprovals(
+  path: string | undefined,
+  allowMissing = false,
+): Promise<AnonymizationApprovalStore | undefined> {
+  if (!path) return undefined;
+  const approvalPath = requireExternalPath(path, "Anonymization approvals path");
+  try {
+    const value = JSON.parse(await readFile(approvalPath, "utf8"));
+    if (!isRecord(value) || value.version !== "semantic-merge-anonymization-approval-v1" || !Array.isArray(value.approvals)) {
+      throw new Error("invalid");
+    }
+    return value as unknown as AnonymizationApprovalStore;
+  } catch (error) {
+    if (allowMissing && isErrorCode(error, "ENOENT")) return undefined;
+    throw new SemanticMergeEvaluationError("Anonymization approvals cannot be read or validated.");
+  }
+}
+
 export function anonymizeEvaluationPlan(
   plan: EvaluationPlan,
   dictionary: AnonymizationDictionary = new Map(),
 ): EvaluationPlan {
-  const reviews: AnonymizationReview[] = [];
-  const entries = plan.entries.map((entry) => {
-    const result = anonymizeTriageInput(entry.input, dictionary);
-    reviews.push(result.review);
-    return {
-      ...entry,
-      input: result.input,
-      inputCharacterCount: inputCharacterCount(result.input),
-      anonymizationReviewed: result.review.reviewComplete,
-    };
-  });
-  const anonymization = mergeAnonymizationReviews(reviews);
+  const prepared = buildAnonymizationReview(plan.entries, dictionary);
+  const anonymization = {
+    ...prepared.review,
+    corpusVersion: corpusVersionForInputs(plan.entries),
+    rulesFingerprint: anonymizationRulesFingerprint(dictionary),
+    approvedItemCount: 0,
+    pendingApprovalCount: prepared.items.length,
+    approvalComplete: false,
+  } satisfies AnonymizationReview;
   if (!anonymization.reviewComplete) {
     throw new SemanticMergeEvaluationError("Anonymization review found unresolved identifiable content.");
   }
+  const entries = plan.entries.map((entry, index) => ({
+    ...entry,
+    input: prepared.inputs[index]!,
+    inputCharacterCount: inputCharacterCount(prepared.inputs[index]!),
+    anonymizationReviewed: anonymization.reviewComplete,
+  }));
   return {
     ...plan,
     entries,
     inputCharacterCount: entries.reduce((total, entry) => total + entry.inputCharacterCount, 0),
     anonymization,
+    anonymizationItems: prepared.items,
+  };
+}
+
+export function applyAnonymizationApprovalStore(
+  plan: EvaluationPlan,
+  dictionary: AnonymizationDictionary,
+  store: AnonymizationApprovalStore | undefined,
+): EvaluationPlan {
+  if (!plan.anonymizationItems || !plan.anonymization) {
+    throw new SemanticMergeEvaluationError("Anonymization review is unavailable.");
+  }
+  const applied = applyAnonymizationApprovals(
+    plan.entries,
+    plan.anonymizationItems,
+    plan.anonymization,
+    store,
+    dictionary,
+  );
+  const entries = plan.entries.map((entry, index) => ({
+    ...entry,
+    input: applied.inputs[index]!,
+    inputCharacterCount: inputCharacterCount(applied.inputs[index]!),
+    anonymizationReviewed: applied.review.approvalComplete === true,
+  }));
+  return {
+    ...plan,
+    entries,
+    inputCharacterCount: entries.reduce((total, entry) => total + entry.inputCharacterCount, 0),
+    anonymization: applied.review,
   };
 }
 
@@ -534,7 +595,7 @@ export async function runNetworkEvaluation(
   preflight: typeof preflightResultsPath = preflightResultsPath,
 ): Promise<readonly StrategyEvaluationResult[]> {
   if (resultsPath) await preflight(resultsPath);
-  if (plan.entries.length > 0 && (!plan.anonymization || !plan.anonymization.reviewComplete)) {
+  if (plan.entries.length > 0 && (!plan.anonymization || !plan.anonymization.reviewComplete || plan.anonymization.approvalComplete !== true)) {
     throw new SemanticMergeEvaluationError("Network evaluation requires reviewed anonymized inputs.");
   }
   printNetworkWarning();
@@ -589,7 +650,13 @@ async function main(): Promise<void> {
   const options = parseRunnerOptions(process.argv.slice(2));
   const data = await loadRunnerData(options);
   const rawPlan = planEvaluationCalls(data.imported.acceptedMergeBenchmarkCases, data.queue, options.strategy, data.annotatedCases);
-  const plan = anonymizeEvaluationPlan(rawPlan, await loadAnonymizationDictionary(options.anonymizationDictionaryPath));
+  const dictionary = await loadAnonymizationDictionary(options.anonymizationDictionaryPath);
+  const reviewedPlan = anonymizeEvaluationPlan(rawPlan, dictionary);
+  const plan = applyAnonymizationApprovalStore(
+    reviewedPlan,
+    dictionary,
+    await loadAnonymizationApprovals(options.anonymizationApprovalsPath),
+  );
   if (options.mode === "dry-run") {
     if (options.resultsPath) await preflightResultsPath(options.resultsPath);
     console.log(renderDryRun(plan, options.strategy));
