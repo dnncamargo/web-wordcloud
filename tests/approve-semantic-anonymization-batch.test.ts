@@ -57,6 +57,8 @@ test("batch declaration is invalidated by any set, count, identity, or final app
   type MutableBatchStore = {
     declarationFingerprint?: string;
     declaredItemCount?: number;
+    dictionaryFingerprint?: string;
+    approvalMode?: "individual" | "operator-batch";
     approvals: Array<{ reviewId: string; approvedText?: string; approvedTextFingerprint?: string; [key: string]: unknown }>;
   };
   const apply = (change: (copy: MutableBatchStore) => void) => {
@@ -71,6 +73,11 @@ test("batch declaration is invalidated by any set, count, identity, or final app
   assert.equal(apply((copy) => { copy.approvals[0].approvedTextFingerprint = "tampered"; }).approvalComplete, false);
   assert.equal(apply((copy) => { copy.approvals.push({ ...copy.approvals[0] }); }).approvalComplete, false);
   assert.equal(apply((copy) => { copy.approvals.pop(); }).approvalComplete, false);
+  assert.equal(apply((copy) => { copy.approvalMode = undefined; }).approvalComplete, false);
+  assert.equal(apply((copy) => { copy.approvalMode = "individual"; }).approvalComplete, false);
+  assert.equal(apply((copy) => { copy.dictionaryFingerprint = "tampered"; }).approvalComplete, false);
+  const unknownMode = { ...store, approvalMode: "unknown" } as unknown as AnonymizationApprovalStore;
+  assert.equal(applyAnonymizationApprovals([], prepared.items, review, unknownMode, dictionary).review.approvalComplete, false);
 });
 
 test("individual approval stores remain compatible without a batch declaration", () => {

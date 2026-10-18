@@ -210,6 +210,18 @@ export function applyAnonymizationApprovals(
     store.corpusVersion === review.corpusVersion &&
     store.rulesFingerprint === review.rulesFingerprint;
   const isBatch = store?.approvalMode === "operator-batch";
+  const batchMetadataPresent = store !== undefined && (
+    store.dictionaryFingerprint !== undefined ||
+    store.declarationFingerprint !== undefined ||
+    store.declaredItemCount !== undefined
+  );
+  const modeIsValid = store?.approvalMode === "operator-batch"
+    ? batchMetadataPresent
+    : store?.approvalMode === "individual"
+      ? !batchMetadataPresent
+      : store?.approvalMode === undefined
+        ? !batchMetadataPresent
+        : false;
   const currentDictionaryFingerprint = anonymizationDictionaryFingerprint(dictionary);
   const currentItemsById = new Map(items.map((item) => [item.reviewId, item]));
   const batchDeclarationIsValid = isBatch && baseStoreIsValid && store?.dictionaryFingerprint === currentDictionaryFingerprint &&
@@ -227,7 +239,7 @@ export function applyAnonymizationApprovals(
         validateApprovedAnonymizedText(approval.approvedText, dictionary);
     }) &&
     store.declarationFingerprint === batchDeclarationFingerprint(items, store.approvals, review, dictionary);
-  const validStore = baseStoreIsValid && (!isBatch || batchDeclarationIsValid);
+  const validStore = baseStoreIsValid && modeIsValid && (!isBatch || batchDeclarationIsValid);
   const approvals = new Map((validStore ? store!.approvals : []).map((approval) => [approval.reviewId, approval]));
   const approvedTexts = new Map<string, string>();
   let approvedItemCount = 0;
