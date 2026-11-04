@@ -2,6 +2,7 @@ import {
   getOpenRouterTriageFailureDiagnostic,
   triagePendingWords,
   triagePendingWordsForEvaluator,
+  type OpenRouterTriageFailureCode,
   type TriageInput,
   type TriageResponse,
 } from "../lib/ai/openRouterTriage";
@@ -50,7 +51,7 @@ const DEFAULT_EXECUTORS: SemanticMergeHoldoutExecutors = {
   withInstruction: (input, instruction) => triagePendingWordsForEvaluator(input, instruction),
 };
 
-const INVALID_RESPONSE_CODES = new Set([
+const INVALID_RESPONSE_CODES: ReadonlySet<OpenRouterTriageFailureCode> = new Set([
   "provider_invalid_json",
   "provider_missing_content",
   "provider_structured_json_invalid",
@@ -93,6 +94,19 @@ export function assertSemanticMergeHoldoutApiKey(hasApiKey: () => boolean = () =
   if (!hasApiKey()) throw new Error("OPENROUTER_API_KEY is required for the authorized semantic merge holdout smoke test.");
 }
 
+export function classifySemanticMergeHoldoutFailure(error: unknown): Readonly<{
+  status: "invalid_response" | "technical_failure";
+  diagnostic: string;
+}> {
+  const diagnostic = getOpenRouterTriageFailureDiagnostic(error);
+  return {
+    status: INVALID_RESPONSE_CODES.has(diagnostic.code) ? "invalid_response" : "technical_failure",
+    diagnostic: diagnostic.code === "provider_result_invalid"
+      ? `${diagnostic.code}:${diagnostic.validationReason}`
+      : diagnostic.code,
+  };
+}
+
 export async function runSemanticMergeHoldout(
   options: SemanticMergeHoldoutOptions,
   evaluate: (smokeCase: SemanticMergeHoldoutCase, strategy: SemanticMergeHoldoutStrategy) => Promise<TriageResponse> =
@@ -110,16 +124,13 @@ export async function runSemanticMergeHoldout(
         const suggestedPairs = response.acceptedMergeSuggestions.map(({ firstId, secondId }) => [firstId, secondId] as const);
         results.push({ caseId: smokeCase.caseId, strategy, status: "valid", suggestedPairs });
       } catch (error: unknown) {
-        const diagnostic = getOpenRouterTriageFailureDiagnostic(error);
-        const status = INVALID_RESPONSE_CODES.has(diagnostic.code) ? "invalid_response" : "technical_failure";
+        const failure = classifySemanticMergeHoldoutFailure(error);
         results.push({
           caseId: smokeCase.caseId,
           strategy,
-          status,
+          status: failure.status,
           suggestedPairs: [],
-          diagnostic: diagnostic.code === "provider_result_invalid"
-            ? `${diagnostic.code}:${diagnostic.validationReason}`
-            : diagnostic.code,
+          diagnostic: failure.diagnostic,
         });
       }
     }

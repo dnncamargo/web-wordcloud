@@ -8,6 +8,7 @@ import { DEDICATED_MERGE_INSTRUCTION } from "../scripts/evaluate-semantic-merges
 import { SEMANTIC_MERGE_HOLDOUT_AUDIT } from "../scripts/semantic-merge-holdout-audit";
 import { SEMANTIC_MERGE_HOLDOUT_CASES } from "../scripts/semantic-merge-holdout-fixtures";
 import {
+  classifySemanticMergeHoldoutFailure,
   evaluateSemanticMergeHoldoutStrategy,
   parseSemanticMergeHoldoutOptions,
   renderSemanticMergeHoldoutPlan,
@@ -147,6 +148,29 @@ test("API key absence blocks all evaluation before the first executor", async ()
   assert.equal(calls, 0);
 });
 
+test("all five response-content failure codes are invalid, while HTTP and unknown failures are technical", () => {
+  const invalidErrors = [
+    new OpenRouterTriageError({ code: "provider_invalid_json" }),
+    new OpenRouterTriageError({ code: "provider_missing_content" }),
+    new OpenRouterTriageError({ code: "provider_structured_json_invalid" }),
+    new OpenRouterTriageError({ code: "provider_result_incomplete" }),
+    new OpenRouterTriageError({ code: "provider_result_invalid", validationReason: "accepted_merge_suggestion_invalid" }),
+  ];
+  for (const error of invalidErrors) {
+    assert.equal(classifySemanticMergeHoldoutFailure(error).status, "invalid_response");
+  }
+  assert.deepEqual(classifySemanticMergeHoldoutFailure(invalidErrors[4]), {
+    status: "invalid_response",
+    diagnostic: "provider_result_invalid:accepted_merge_suggestion_invalid",
+  });
+  for (const error of [
+    new OpenRouterTriageError({ code: "provider_http_error", providerStatus: 503 }),
+    new OpenRouterTriageError({ code: "provider_unknown_failure" }),
+  ]) {
+    assert.equal(classifySemanticMergeHoldoutFailure(error).status, "technical_failure");
+  }
+});
+
 test("scoring counts TP, FP, FN separately from invalid responses and technical failures", async () => {
   const results = await runSemanticMergeHoldout({ allowNetwork: true }, async (smokeCase, strategy) => {
     if (smokeCase.caseId === "H01" && strategy === "unified") {
@@ -169,6 +193,24 @@ test("scoring counts TP, FP, FN separately from invalid responses and technical 
     invalidResponses: 0,
     technicalFailures: 0,
     scoredCalls: 10,
+  });
+  assert.deepEqual(summaries.find(({ strategy }) => strategy === "dedicated"), {
+    strategy: "dedicated",
+    truePositives: 0,
+    falsePositives: 0,
+    falseNegatives: 3,
+    invalidResponses: 1,
+    technicalFailures: 0,
+    scoredCalls: 9,
+  });
+  assert.deepEqual(summaries.find(({ strategy }) => strategy === "dedicated-calibrated"), {
+    strategy: "dedicated-calibrated",
+    truePositives: 0,
+    falsePositives: 0,
+    falseNegatives: 3,
+    invalidResponses: 0,
+    technicalFailures: 1,
+    scoredCalls: 9,
   });
   assert.equal(summaries.find(({ strategy }) => strategy === "dedicated")?.invalidResponses, 1);
   assert.equal(summaries.find(({ strategy }) => strategy === "dedicated")?.technicalFailures, 0);
