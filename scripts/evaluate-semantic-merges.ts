@@ -540,22 +540,31 @@ export function anonymizeEvaluationPlan(
   plan: EvaluationPlan,
   dictionary: AnonymizationDictionary = new Map(),
 ): EvaluationPlan {
-  const prepared = buildAnonymizationReview(plan.entries, dictionary);
+  const canonicalEntries = canonicalAnonymizationEntries(plan.entries);
+  const canonicalCloudCount = canonicalEntries.length / 2;
+  const prepared = buildAnonymizationReview(canonicalEntries, dictionary);
+  const sanitizedInputByCloud = new Map(
+    canonicalEntries.slice(0, canonicalCloudCount).map((entry, index) => [entry.cloudPseudonym, prepared.inputs[index]!]),
+  );
   const anonymization = {
     ...prepared.review,
-    corpusVersion: corpusVersionForInputs(plan.entries),
+    corpusVersion: corpusVersionForInputs(canonicalEntries),
     rulesFingerprint: anonymizationRulesFingerprint(dictionary),
     dictionaryFingerprint: anonymizationDictionaryFingerprint(dictionary),
     approvedItemCount: 0,
     pendingApprovalCount: prepared.items.length,
     approvalComplete: false,
   } satisfies AnonymizationReview;
-  const entries = plan.entries.map((entry, index) => ({
-    ...entry,
-    input: prepared.inputs[index]!,
-    inputCharacterCount: inputCharacterCount(prepared.inputs[index]!),
-    anonymizationReviewed: anonymization.reviewComplete,
-  }));
+  const entries = plan.entries.map((entry) => {
+    const input = sanitizedInputByCloud.get(entry.cloudPseudonym);
+    if (!input) throw new SemanticMergeEvaluationError("Anonymized input is unavailable for a planned cloud.");
+    return {
+      ...entry,
+      input,
+      inputCharacterCount: inputCharacterCount(input),
+      anonymizationReviewed: anonymization.reviewComplete,
+    };
+  });
   return {
     ...plan,
     entries,
@@ -563,6 +572,28 @@ export function anonymizeEvaluationPlan(
     anonymization,
     anonymizationItems: prepared.items,
   };
+}
+
+function canonicalAnonymizationEntries(
+  entries: readonly EvaluationPlanEntry[],
+): readonly Readonly<{ cloudPseudonym: string; input: TriageInput }>[] {
+  const strategyOrder = [...new Set(entries.map((entry) => entry.strategy))];
+  const strategyGroups = strategyOrder.map((strategy) => entries.filter((entry) => entry.strategy === strategy));
+  const firstGroup = strategyGroups[0] ?? [];
+  const inputIdentity = (entry: EvaluationPlanEntry): string => JSON.stringify({
+    cloudPseudonym: entry.cloudPseudonym,
+    question: entry.input.question,
+    acceptedWords: entry.input.acceptedWords,
+    pendingWords: entry.input.pendingWords,
+  });
+  const firstGroupIdentities = firstGroup.map(inputIdentity);
+  if (strategyGroups.some((group) =>
+    group.length !== firstGroup.length || group.some((entry, index) => inputIdentity(entry) !== firstGroupIdentities[index])
+  )) {
+    throw new SemanticMergeEvaluationError("Strategies must use the same ordered cloud inputs for anonymization approval.");
+  }
+  const canonicalGroup = firstGroup.map(({ cloudPseudonym, input }) => ({ cloudPseudonym, input }));
+  return [...canonicalGroup, ...canonicalGroup];
 }
 
 export function applyAnonymizationApprovalStore(

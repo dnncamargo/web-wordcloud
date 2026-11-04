@@ -7,6 +7,7 @@ import type { TriageInput, TriageResponse } from "../lib/ai/openRouterTriage";
 import {
   DEDICATED_MERGE_INSTRUCTION,
   assertOpenRouterApiKey,
+  applyAnonymizationApprovalStore,
   buildResultsDocument,
   evaluateStrategy,
   evaluationRunStatus,
@@ -23,6 +24,14 @@ import {
   type EvaluationPlanEntry,
 } from "../scripts/evaluate-semantic-merges";
 import { DEDICATED_CALIBRATED_INSTRUCTION } from "../scripts/semantic-merge-calibrated-instruction";
+import {
+  anonymizationDictionaryFingerprint,
+  anonymizationRulesFingerprint,
+  batchDeclarationFingerprint,
+  createBatchApprovalStore,
+  corpusVersionForInputs,
+  parseAnonymizationDictionary,
+} from "../scripts/semantic-merge-anonymizer";
 import {
   generateAcceptedMergeBenchmarkCases,
   parseCalibrationExport,
@@ -198,6 +207,110 @@ test("all-three plans 27 calls for nine clouds using the same inputs in stable s
   }
 });
 
+test("batch anonymization approval fingerprints remain compatible across two and three strategies", () => {
+  const exportData = parseCalibrationExport({
+    schemaVersion: 1,
+    clouds: Array.from({ length: 9 }, (_, index) => syntheticCloud(`approval-${String(index + 1).padStart(2, "0")}`)),
+  });
+  const cases = generateAcceptedMergeBenchmarkCases(exportData, "synthetic-approval-salt", {
+    enforceAuthorizedScope: false,
+  });
+  const queue = {
+    benchmarkVersion: "semantic-merge-v1" as const,
+    selectionVersion: "lexical-stratified-v1" as const,
+    targetCount: 0,
+    candidateCount: cases.length,
+    selectedCount: 0,
+    selectionCriteria: [],
+    tierCounts: { high: 0, medium: 0, low: 0 } as const,
+    cloudCounts: {},
+    items: [],
+  };
+  const dictionary = parseAnonymizationDictionary({ "Safe transport": "[SYNTHETIC_IDEA]" });
+  const historicalRaw = planEvaluationCalls(cases, queue, "both", []);
+  const historicalReview = anonymizeEvaluationPlan(historicalRaw, dictionary);
+  assert.equal(historicalReview.anonymization?.corpusVersion, corpusVersionForInputs(historicalRaw.entries));
+  const approvalStore = createBatchApprovalStore(
+    historicalReview.anonymizationItems!,
+    historicalReview.anonymization!,
+    true,
+    dictionary,
+  );
+  const originalStore = JSON.stringify(approvalStore);
+
+  const allThreeRaw = planEvaluationCalls(cases, queue, "all-three", []);
+  const allThreeReview = anonymizeEvaluationPlan(allThreeRaw, dictionary);
+  assert.equal(allThreeRaw.entries.length, 27);
+  assert.equal(allThreeReview.anonymization?.corpusVersion, historicalReview.anonymization?.corpusVersion);
+  assert.equal(allThreeReview.anonymization?.rulesFingerprint, historicalReview.anonymization?.rulesFingerprint);
+  assert.equal(allThreeReview.anonymization?.dictionaryFingerprint, historicalReview.anonymization?.dictionaryFingerprint);
+  assert.equal(allThreeReview.anonymization?.rulesFingerprint, anonymizationRulesFingerprint(dictionary));
+  assert.equal(allThreeReview.anonymization?.dictionaryFingerprint, anonymizationDictionaryFingerprint(dictionary));
+  assert.equal(allThreeReview.anonymizationItems?.length, historicalReview.anonymizationItems?.length);
+  assert.deepEqual(allThreeReview.anonymizationItems, historicalReview.anonymizationItems);
+  for (const strategy of ["unified", "dedicated", "dedicated-calibrated"] as const) {
+    const singleStrategyReview = anonymizeEvaluationPlan(planEvaluationCalls(cases, queue, strategy, []), dictionary);
+    assert.equal(singleStrategyReview.anonymization?.corpusVersion, historicalReview.anonymization?.corpusVersion);
+    assert.equal(singleStrategyReview.anonymization?.rulesFingerprint, historicalReview.anonymization?.rulesFingerprint);
+    assert.equal(singleStrategyReview.anonymization?.dictionaryFingerprint, historicalReview.anonymization?.dictionaryFingerprint);
+  }
+  assert.equal(new Set(allThreeReview.anonymizationItems?.map(({ reviewId }) => reviewId)).size, allThreeReview.anonymizationItems?.length);
+  assert.equal(
+    batchDeclarationFingerprint(
+      allThreeReview.anonymizationItems!,
+      approvalStore.approvals,
+      allThreeReview.anonymization!,
+      dictionary,
+    ),
+    approvalStore.declarationFingerprint,
+    "the existing declaration fingerprint must remain compatible",
+  );
+
+  const approved = applyAnonymizationApprovalStore(allThreeReview, dictionary, approvalStore);
+  assert.equal(approved.anonymization?.approvalComplete, true);
+  assert.equal(approved.anonymization?.pendingApprovalCount, 0);
+  for (let index = 0; index < 9; index += 1) {
+    const unified = approved.entries[index]!;
+    const dedicated = approved.entries[9 + index]!;
+    const calibrated = approved.entries[18 + index]!;
+    assert.equal(unified.cloudPseudonym, dedicated.cloudPseudonym);
+    assert.equal(unified.cloudPseudonym, calibrated.cloudPseudonym);
+    assert.deepEqual(unified.input.acceptedWords.map(({ id }) => id), dedicated.input.acceptedWords.map(({ id }) => id));
+    assert.deepEqual(unified.input.acceptedWords.map(({ id }) => id), calibrated.input.acceptedWords.map(({ id }) => id));
+    assert.deepEqual(unified.input, dedicated.input);
+    assert.deepEqual(unified.input, calibrated.input);
+  }
+  assert.equal(JSON.stringify(approvalStore), originalStore, "applying an approval must not mutate the store");
+
+  const changeInputs = (change: (input: TriageInput) => TriageInput) => ({
+    ...allThreeRaw,
+    entries: allThreeRaw.entries.map((entry) => ({ ...entry, input: change(entry.input) })),
+  });
+  const changedQuestion = anonymizeEvaluationPlan(changeInputs((input) => ({
+    ...input,
+    question: `${input.question} updated`,
+  })), dictionary);
+  assert.notEqual(changedQuestion.anonymization?.corpusVersion, allThreeReview.anonymization?.corpusVersion);
+  assert.equal(applyAnonymizationApprovalStore(changedQuestion, dictionary, approvalStore).anonymization?.approvalComplete, false);
+  const changedIdea = anonymizeEvaluationPlan(changeInputs((input) => ({
+    ...input,
+    acceptedWords: input.acceptedWords.map((word, index) => index === 0 ? { ...word, text: `${word.text} updated` } : word),
+  })), dictionary);
+  assert.notEqual(changedIdea.anonymization?.corpusVersion, allThreeReview.anonymization?.corpusVersion);
+  assert.equal(applyAnonymizationApprovalStore(changedIdea, dictionary, approvalStore).anonymization?.approvalComplete, false);
+
+  const changedDictionary = parseAnonymizationDictionary({ "Safe transport": "[OTHER_SYNTHETIC_IDEA]" });
+  const changedDictionaryPlan = anonymizeEvaluationPlan(allThreeRaw, changedDictionary);
+  assert.notEqual(changedDictionaryPlan.anonymization?.dictionaryFingerprint, allThreeReview.anonymization?.dictionaryFingerprint);
+  assert.equal(applyAnonymizationApprovalStore(changedDictionaryPlan, changedDictionary, approvalStore).anonymization?.approvalComplete, false);
+
+  const changedRulesPlan = {
+    ...allThreeReview,
+    anonymization: { ...allThreeReview.anonymization!, rulesFingerprint: "synthetic-changed-rules" },
+  };
+  assert.equal(applyAnonymizationApprovalStore(changedRulesPlan, dictionary, approvalStore).anonymization?.approvalComplete, false);
+});
+
 test("dedicated strategies share the evaluator while receiving their unchanged prompts", async () => {
   const input: TriageInput = {
     question: "Which ideas improve local transit?",
@@ -367,7 +480,7 @@ test("unresolved anonymization risk remains visible and blocks the network execu
     positiveAnnotationCount: 0,
   });
   assert.equal(plan.anonymization?.reviewComplete, false);
-  await assert.rejects(runNetworkEvaluation(plan, [], "unified", undefined, async () => { throw new Error("must not execute"); }), /reviewed anonymized inputs/);
+  await assert.rejects(runNetworkEvaluation(plan, [], "all-three", undefined, async () => { throw new Error("must not execute"); }), /reviewed anonymized inputs/);
 });
 
 test("prediction matching is independent of pair order", () => {
