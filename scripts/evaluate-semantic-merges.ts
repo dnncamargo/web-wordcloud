@@ -12,6 +12,7 @@ import {
 } from "../lib/ai/openRouterTriage";
 import { getOpenRouterApiKey, getOpenRouterModel } from "../lib/ai/openRouterConfig";
 import { validateTriageInput } from "../lib/ai/triage-contract";
+import { DEDICATED_CALIBRATED_INSTRUCTION } from "./semantic-merge-calibrated-instruction";
 import {
   evaluateSemanticMergePredictions,
   importCalibrationCorpus,
@@ -51,8 +52,8 @@ export const DEDICATED_MERGE_INSTRUCTION = [
   "Do not accept, reject, merge, moderate, choose a canonical wording, or infer teacher intent.",
 ].join(" ");
 
-export type MergeEvaluationStrategy = "unified" | "dedicated";
-export type StrategySelection = MergeEvaluationStrategy | "both";
+export type MergeEvaluationStrategy = "unified" | "dedicated" | "dedicated-calibrated";
+export type StrategySelection = MergeEvaluationStrategy | "both" | "all-three";
 export type RunnerMode = "dry-run" | "allow-network";
 
 export type SemanticRunnerOptions = Readonly<{
@@ -258,7 +259,9 @@ function inputCharacterCount(input: TriageInput): number {
 }
 
 export function selectedStrategies(selection: StrategySelection): readonly MergeEvaluationStrategy[] {
-  return selection === "both" ? ["unified", "dedicated"] : [selection];
+  if (selection === "both") return ["unified", "dedicated"];
+  if (selection === "all-three") return ["unified", "dedicated", "dedicated-calibrated"];
+  return [selection];
 }
 
 export function planEvaluationCalls(
@@ -313,11 +316,18 @@ export function parseRunnerOptions(args: readonly string[]): SemanticRunnerOptio
     } else if (arg.startsWith("--results-path=")) {
       resultsPath = arg.slice("--results-path=".length);
     } else {
-      throw new SemanticMergeEvaluationError("Usage: evaluate-semantic-merges.ts --dry-run|--allow-network --strategy unified|dedicated|both [--results-path ABSOLUTE]");
+      throw new SemanticMergeEvaluationError("Usage: evaluate-semantic-merges.ts --dry-run|--allow-network --strategy unified|dedicated|dedicated-calibrated|both|all-three [--results-path ABSOLUTE]");
     }
   }
   if (!mode || !strategy) {
     throw new SemanticMergeEvaluationError("Mode and explicit strategy are required.");
+  }
+  if (
+    mode === "allow-network" &&
+    selectedStrategies(strategy).includes("dedicated-calibrated") &&
+    !resultsPath
+  ) {
+    throw new SemanticMergeEvaluationError("Network evaluations including dedicated-calibrated require a new --results-path destination.");
   }
   return {
     mode,
@@ -333,8 +343,11 @@ export function parseRunnerOptions(args: readonly string[]): SemanticRunnerOptio
 
 function parseStrategy(value: string): StrategySelection {
   const normalized = value.toLowerCase();
-  if (normalized === "unified" || normalized === "dedicated" || normalized === "both") return normalized;
-  throw new SemanticMergeEvaluationError("Strategy must be unified, dedicated, or both.");
+  if (
+    normalized === "unified" || normalized === "dedicated" ||
+    normalized === "dedicated-calibrated" || normalized === "both" || normalized === "all-three"
+  ) return normalized;
+  throw new SemanticMergeEvaluationError("Strategy must be unified, dedicated, dedicated-calibrated, both, or all-three.");
 }
 
 export function renderDryRun(plan: EvaluationPlan, selection: StrategySelection): string {
@@ -388,10 +401,21 @@ function addFailure(
   counts.failureCodes.set(code, (counts.failureCodes.get(code) ?? 0) + 1);
 }
 
+export type EvaluationStrategyExecutors = Readonly<{
+  unified: (input: TriageInput) => Promise<TriageResponse>;
+  withInstruction: (input: TriageInput, instruction: string) => Promise<TriageResponse>;
+}>;
+
+const DEFAULT_STRATEGY_EXECUTORS: EvaluationStrategyExecutors = {
+  unified: triagePendingWords,
+  withInstruction: (input, instruction) => triagePendingWordsForEvaluator(input, instruction),
+};
+
 export async function evaluateStrategy(
   strategy: MergeEvaluationStrategy,
   entries: readonly EvaluationPlanEntry[],
   benchmarkCases: readonly AcceptedMergeBenchmarkCase[],
+  executors: EvaluationStrategyExecutors = DEFAULT_STRATEGY_EXECUTORS,
 ): Promise<StrategyEvaluationResult> {
   const predictions: string[] = [];
   const counts = { providerFailures: 0, schemaFailures: 0, transportFailures: 0, failureCodes: new Map<string, number>() };
@@ -403,8 +427,11 @@ export async function evaluateStrategy(
   for (const entry of strategyEntries) {
     try {
       const response = strategy === "unified"
-        ? await triagePendingWords(entry.input)
-        : await triagePendingWordsForEvaluator(entry.input, DEDICATED_MERGE_INSTRUCTION);
+        ? await executors.unified(entry.input)
+        : await executors.withInstruction(
+          entry.input,
+          strategy === "dedicated" ? DEDICATED_MERGE_INSTRUCTION : DEDICATED_CALIBRATED_INSTRUCTION,
+        );
       predictions.push(...predictedPairIdentities(response));
       successfulResponses += 1;
     } catch (error: unknown) {
