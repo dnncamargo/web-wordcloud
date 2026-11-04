@@ -61,6 +61,45 @@ export const SYNTHETIC_SMOKE_CASES = [
     },
     expectedPairs: [],
   },
+  {
+    caseId: "D",
+    input: {
+      question: "Como as famílias podem reduzir a quantidade de carros usados para levar alunos à escola?",
+      acceptedWords: [
+        { id: "idea-a", text: "Combinar que as famílias dividam os trajetos de carro até a escola." },
+        { id: "idea-b", text: "Organizar um sistema de caronas escolares entre responsáveis." },
+        { id: "idea-c", text: "Criar um bicicletário para estudantes." },
+      ],
+      pendingWords: [],
+    },
+    expectedPairs: [["idea-a", "idea-b"]],
+  },
+  {
+    caseId: "E",
+    input: {
+      question: "Como reduzir o lixo plástico produzido na escola?",
+      acceptedWords: [
+        { id: "idea-a", text: "Instalar bebedouros para os alunos reabastecerem suas garrafas." },
+        { id: "idea-b", text: "Distribuir sacolas reutilizáveis na cantina." },
+        { id: "idea-c", text: "Substituir copos descartáveis por canecas duráveis." },
+      ],
+      pendingWords: [],
+    },
+    expectedPairs: [],
+  },
+  {
+    caseId: "F",
+    input: {
+      question: "Como reduzir o consumo de eletricidade na escola?",
+      acceptedWords: [
+        { id: "idea-a", text: "Diminuir o consumo de energia elétrica do prédio." },
+        { id: "idea-b", text: "Instalar sensores que desliguem as luzes quando as salas estiverem vazias." },
+        { id: "idea-c", text: "Substituir equipamentos antigos por modelos mais eficientes." },
+      ],
+      pendingWords: [],
+    },
+    expectedPairs: [],
+  },
 ] as const satisfies readonly Readonly<{
   caseId: string;
   input: TriageInput;
@@ -102,11 +141,11 @@ export function renderSyntheticSmokePlan(): string {
   return [
     "SEMANTIC_MERGE_SMOKE_PLAN",
     "network_enabled=false",
-    "planned_calls=9",
-    "cases=A,B,C",
+    "planned_calls=18",
+    "cases=A,B,C,D,E,F",
     "strategies=unified,dedicated,dedicated-calibrated",
     "accepted_word_ids=idea-a,idea-b,idea-c",
-    "expected_pairs=A:idea-a/idea-b;B:none;C:none",
+    "expected_pairs=A:idea-a/idea-b;B:none;C:none;D:idea-a/idea-b;E:none;F:none",
     "corpus_loaded=false",
     "results_printed=metadata_only",
   ].join("\n");
