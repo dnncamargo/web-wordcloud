@@ -131,15 +131,33 @@ test("dedicated baselines remain byte-for-byte unchanged and calibrated strategy
     .map(([line]) => JSON.parse(line!.trim().slice(0, -1)) as string);
   assert.deepEqual(systemInstruction, BASELINE_SYSTEM_INSTRUCTION);
   assert.equal(DEDICATED_CALIBRATED_INSTRUCTION.includes(BASELINE_DEDICATED_INSTRUCTION), false);
-  let receivedInstruction = "";
-  await evaluateSyntheticStrategy(SYNTHETIC_SMOKE_CASES[0], "dedicated-calibrated", async (_input, instruction) => {
-    receivedInstruction = instruction;
+  const receivedInstructions: string[] = [];
+  await evaluateSyntheticStrategy(SYNTHETIC_SMOKE_CASES[0], "dedicated", async (_input, instruction) => {
+    receivedInstructions.push(instruction);
     return { results: [], acceptedMergeSuggestions: [] };
   });
-  assert.equal(receivedInstruction, DEDICATED_CALIBRATED_INSTRUCTION);
-  assert.match(receivedInstruction, /A purpose and a means/);
-  assert.match(receivedInstruction, /Differences in scope/);
-  assert.match(receivedInstruction, /Would a teacher consider/);
+  await evaluateSyntheticStrategy(SYNTHETIC_SMOKE_CASES[0], "dedicated-calibrated", async (_input, instruction) => {
+    receivedInstructions.push(instruction);
+    return { results: [], acceptedMergeSuggestions: [] };
+  });
+  assert.deepEqual(receivedInstructions, [DEDICATED_MERGE_INSTRUCTION, DEDICATED_CALIBRATED_INSTRUCTION]);
+});
+
+test("calibrated instruction includes concise contrasts from a domain distinct from the fixtures", () => {
+  const examples = [
+    "Organize a school book exchange.",
+    "Set up a book-swap event at school.",
+    "Improve access to healthy food.",
+    "Offer fresh fruit at school lunch.",
+    "Create a school library.",
+    "Start a student reading club.",
+  ];
+  for (const example of examples) {
+    assert.ok(DEDICATED_CALIBRATED_INSTRUCTION.includes(example), `missing contrastive example: ${example}`);
+    assert.equal(SYNTHETIC_SMOKE_CASES.some(({ input }) => input.acceptedWords.some(({ text }) => text.includes(example))), false);
+  }
+  assert.match(DEDICATED_CALIBRATED_INSTRUCTION, /The examples are not candidates/);
+  assert.match(DEDICATED_CALIBRATED_INSTRUCTION, /exact IDs supplied in acceptedWords/);
 });
 
 test("synthetic fixtures A, B, and C remain unchanged", () => {
