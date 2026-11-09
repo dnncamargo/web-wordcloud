@@ -1085,7 +1085,7 @@ input {
 
 .accepted-clean-word {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 56px 32px;
+  grid-template-columns: minmax(0, 1fr) 52px 28px;
   align-items: start;
   gap: 8px;
 }
@@ -1096,9 +1096,10 @@ input {
   gap: 6px;
 }
 
-.accepted-word-fields {
+.accepted-word-row {
   min-width: 0;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 3rem;
   align-items: center;
   gap: 8px;
 }
@@ -1107,12 +1108,76 @@ input {
   min-width: 0;
 }
 
-.accepted-word-fields input {
-  flex: 1 1 auto;
+.accepted-word-controls {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
 }
 
-.accepted-word-fields .canonical-form-select {
-  flex: 0 1 11rem;
+.accepted-word-controls input {
+  flex: 1 1 0;
+  width: 0;
+  min-width: 2rem;
+  line-height: 1.25;
+  padding: 0.35rem 0.4rem;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  font-weight: 800;
+}
+
+.accepted-word-controls input:focus {
+  border-color: rgba(14, 165, 233, 0.35);
+}
+
+.accepted-word-edit-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+}
+
+.accepted-word-edit-actions .button {
+  display: inline-grid;
+  width: 27px;
+  height: 27px;
+  min-height: 27px;
+  place-items: center;
+  padding: 0;
+  border-radius: 3px;
+}
+
+.accepted-word-edit-actions .button:focus-visible,
+.accepted-word-controls input:focus-visible,
+.accepted-word-controls .canonical-form-select:focus-visible {
+  outline: 2px solid var(--accent-dark);
+  outline-offset: 2px;
+}
+
+.accepted-word-controls .canonical-form-select {
+  flex: 0 1 9rem;
+  width: 9rem;
+  min-width: 4.5rem;
+  max-width: 36%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.word-operation-history {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.word-operation-history li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(23, 32, 51, 0.08);
 }
 
 .accepted-clean-word .word-count,
@@ -1143,6 +1208,14 @@ input {
   align-self: start;
 }
 
+.accepted-clean-word .word-count {
+  padding-top: 5px;
+}
+
+.accepted-clean-word .remove-word-button {
+  margin-top: 1px;
+}
+
 .accepted-merge-suggestion > span {
   color: var(--muted);
   font-weight: inherit;
@@ -1151,6 +1224,7 @@ input {
 @media (max-width: 980px) {
   .accepted-clean-word {
     grid-template-columns: minmax(0, 1fr) 48px 28px;
+    gap: 6px;
   }
 
   .accepted-clean-word .remove-word-button {
@@ -1160,15 +1234,16 @@ input {
 
 .canonical-form-select {
   min-width: 0;
-  max-width: 11rem;
+  max-width: 9rem;
   border: 0;
   outline: 0;
-  border-radius: 6px;
+  border-radius: 3px;
   padding: 0.3rem 0.35rem;
   background: rgba(23, 32, 51, 0.05);
   color: var(--muted);
   font: inherit;
   font-size: 0.72rem;
+  cursor: pointer;
 }
 
 .remove-word-button {

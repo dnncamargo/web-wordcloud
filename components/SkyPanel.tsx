@@ -16,16 +16,20 @@ import {
   listenClouds,
   listenGlobalSettings,
   listenNewWords,
+  listenWordOperations,
   listenWords,
   mergeAcceptedWords,
   mergeNewWordIntoWord,
+  undoWordOperation,
   rejectNewWord,
   unarchiveCloud,
   updateCloudText,
   updateWordText,
+  WordOperationSummary,
   blowWind,
 } from "@/lib/firebase/cloudService";
 import { getCanonicalWordCandidates } from "@/lib/firebase/canonicalWord";
+import { getAcceptedWordEditState } from "@/lib/firebase/acceptedWordEdit";
 import {
   getAcceptedMergeCanonicalCandidates,
   getAcceptedMergePairKey,
@@ -56,7 +60,7 @@ import type {
   AcceptedMergeSuggestion,
   TriageInput,
 } from "@/lib/ai/triage-contract";
-import { Archive, ArchiveRestore, Plus, Sparkles, Wind, X } from "lucide-react";
+import { Archive, ArchiveRestore, Check, Plus, Sparkles, Wind, X } from "lucide-react";
 
 function getStatusLabel(status: FirebaseCloud["status"]) {
   if (status === "open") return "aberta";
@@ -71,12 +75,19 @@ function getDeviceShortId(deviceId: string) {
   return deviceId.replaceAll("-", "").slice(0, 4).toUpperCase();
 }
 
+function getAcceptedWordDraftKey(cloudId: string, wordId: string) {
+  return `${cloudId}:${wordId}`;
+}
+
 export default function SkyPanel() {
   const [clouds, setClouds] = useState<FirebaseCloud[]>([]);
   const [activeCloudId, setActiveCloudId] = useState<string | null>(null);
   const [selectedCloudId, setSelectedCloudId] = useState<string | null>(null);
   const [words, setWords] = useState<FirebaseWord[]>([]);
   const [newWords, setNewWords] = useState<FirebaseNewWord[]>([]);
+  const [wordOperations, setWordOperations] = useState<WordOperationSummary[]>([]);
+  const [undoingOperationId, setUndoingOperationId] = useState<string | null>(null);
+  const [acceptedWordDrafts, setAcceptedWordDrafts] = useState<Record<string, string>>({});
   const [titleDraft, setTitleDraft] = useState("");
   const [questionDraft, setQuestionDraft] = useState("");
   const [feedback, setFeedback] = useState("");
@@ -196,10 +207,12 @@ export default function SkyPanel() {
       invalidateAnalysis();
       setNewWords(nextNewWords);
     });
+    const unsubscribeOperations = listenWordOperations(selectedCloudId, setWordOperations);
 
     return () => {
       unsubscribeWords();
       unsubscribeNewWords();
+      unsubscribeOperations();
     };
   }, [invalidateAnalysis, selectedCloudId]);
 
@@ -418,7 +431,15 @@ export default function SkyPanel() {
 
     const didChange = await chooseCanonicalWordForm(selectedCloudId, word.id, candidate);
 
-    if (didChange) setFeedback(`Forma canônica alterada para "${candidate}".`);
+    if (didChange) {
+      const draftKey = getAcceptedWordDraftKey(selectedCloudId, word.id);
+      setAcceptedWordDrafts((current) => {
+        const next = { ...current };
+        delete next[draftKey];
+        return next;
+      });
+      setFeedback(`Forma canônica alterada para "${candidate}".`);
+    }
   }
 
   async function handleMergeAcceptedWords(
@@ -452,12 +473,37 @@ export default function SkyPanel() {
   async function handleUpdateAcceptedWord(word: FirebaseWord, value: string) {
     if (!selectedCloudId) return;
 
+    const draftKey = getAcceptedWordDraftKey(selectedCloudId, word.id);
     const cleanValue = value.trim();
 
     if (!cleanValue || cleanValue === word.text) return;
 
-    await updateWordText(selectedCloudId, word, cleanValue);
-    setFeedback("Palavra atualizada.");
+    const result = await updateWordText(selectedCloudId, word, cleanValue);
+    if (result === "updated") {
+      setAcceptedWordDrafts((current) => {
+        const next = { ...current };
+        delete next[draftKey];
+        return next;
+      });
+      setFeedback("Correção confirmada e disponível no histórico para desfazer.");
+    }
+    else if (result === "conflict") setFeedback("A correção colide com outra ideia ou mudaria a identidade estável do registro. Nenhuma alteração foi feita.");
+    else if (result === "unavailable") setFeedback("A ideia mudou ou não está mais disponível. Atualize a lista antes de editar.");
+  }
+
+  async function handleUndoWordOperation(operation: WordOperationSummary) {
+    if (!selectedCloudId || operation.status !== "applied" || operation.type === "undo") return;
+    setUndoingOperationId(operation.id);
+    try {
+      const result = await undoWordOperation(selectedCloudId, operation.id);
+      if (result.kind === "undone") setFeedback("Operação desfeita. O registro original permanece no histórico.");
+      else if (result.kind === "changed_since_operation") setFeedback("Não foi possível desfazer: os dados relacionados mudaram depois. Nenhum registro foi alterado.");
+      else setFeedback("Essa operação não está disponível para desfazer.");
+    } catch {
+      setFeedback("Não foi possível desfazer a operação. Nenhum dado foi substituído.");
+    } finally {
+      setUndoingOperationId(null);
+    }
   }
 
   function handleSelectSpelling(word: FirebaseNewWord, spelling: string) {
@@ -472,22 +518,34 @@ export default function SkyPanel() {
     if (!selectedCloudId) return;
 
     const plan = getPendingApprovalPlan(word.text, selectedSpellings[word.id]);
-    let didApprove = true;
-
     if (plan.operation === "approveNewWordAs") {
-      didApprove = await approveNewWordAs(selectedCloudId, word.id, plan.text);
+      const result = await approveNewWordAs(selectedCloudId, word.id, plan.text);
+      if (result === "conflict") {
+        setFeedback("A forma corrigida já existe. Nenhuma agregação automática foi feita; use a mesclagem manual se for apropriado.");
+        return;
+      }
+      if (result === "unavailable") {
+        setFeedback("A submissão mudou ou não está mais disponível. Atualize a lista.");
+        return;
+      }
     } else {
-      await approveNewWord(selectedCloudId, word.id, plan.text);
+      const result = await approveNewWord(selectedCloudId, word.id, plan.text);
+      if (result === "conflict") {
+        setFeedback("A palavra de destino mudou ou já está associada a outra forma. Nenhuma agregação automática foi feita.");
+        return;
+      }
+      if (result === "unavailable") {
+        setFeedback("A submissão mudou ou não está mais disponível. Atualize a lista.");
+        return;
+      }
     }
 
-    if (didApprove) {
-      setSelectedSpellings((current) => clearPendingSpelling(current, word.id));
-      setFeedback(
-        plan.operation === "approveNewWordAs"
-          ? `"${plan.text.trim()}" foi aceita com a grafia escolhida.`
-          : `"${plan.text.trim()}" foi aceita.`,
-      );
-    }
+    setSelectedSpellings((current) => clearPendingSpelling(current, word.id));
+    setFeedback(
+      plan.operation === "approveNewWordAs"
+        ? `"${plan.text.trim()}" foi aceita com a grafia escolhida. É possível desfazer no histórico.`
+        : `"${plan.text.trim()}" foi aceita.`,
+    );
   }
 
   const pendingIdeaStats = useMemo(() => {
@@ -654,70 +712,110 @@ export default function SkyPanel() {
                 {words.length === 0 ? (
                   <p className="clean-empty">Nenhuma palavra aceita ainda.</p>
                 ) : (
-                  words.map((word) => (
-                    <article key={word.id} className="accepted-clean-word">
-                      <div className="accepted-word-content">
-                        <div className="accepted-word-fields">
-                          <input key={`${word.id}:${word.text}`} defaultValue={word.text} onBlur={(event) => handleUpdateAcceptedWord(word, event.target.value)} />
+                  words.map((word) => {
+                    const draftKey = getAcceptedWordDraftKey(selectedCloud.id, word.id);
+                    const draft = acceptedWordDrafts[draftKey];
+                    const editState = getAcceptedWordEditState(word.text, word.id, draft);
+                    return (
+                      <article key={word.id} className="accepted-clean-word">
+                        <div className="accepted-word-content">
+                          <div className="accepted-word-row">
+                            <div className="accepted-word-controls">
+                              <input
+                                id={`accepted-word-${word.id}`}
+                                aria-label={`Editar ideia aceita: ${word.text}`}
+                                aria-invalid={editState.hasDraft && !editState.canConfirm}
+                                title={editState.hasDraft && !editState.canConfirm ? "A correção precisa manter a identidade normalizada desta palavra." : undefined}
+                                value={draft ?? word.text}
+                                onChange={(event) => setAcceptedWordDrafts((current) => ({ ...current, [draftKey]: event.target.value }))}
+                              />
 
-                          {(word.aliases?.length ?? 0) > 0 && (
-                            <select
-                              aria-label={`Escolher forma canônica de ${word.text}`}
-                              className="canonical-form-select"
-                              onChange={(event) => handleChooseCanonicalWordForm(word, event.target.value)}
-                              value={word.text}
-                            >
-                              {getCanonicalWordCandidates(word.text, word.aliases).map((candidate) => (
-                                <option key={candidate} value={candidate}>
-                                  {candidate}
-                                </option>
-                              ))}
-                            </select>
-                          )}
-
-                          <span className={`merge-count ${(word.aliases?.length ?? 0) === 0 ? "empty" : ""}`} title={word.aliases?.join(", ")}>
-                            (+{word.aliases?.length ?? 0})
-                          </span>
-                        </div>
-
-                        {visibleAcceptedMergeSuggestions
-                          .filter(({ firstWord }) => firstWord.id === word.id)
-                          .map(({ firstWord, secondWord, pairKey }) => {
-                            const candidates = getAcceptedMergeCanonicalCandidates(firstWord, secondWord);
-                            const selectedCanonical = acceptedMergeCanonicalSelections[pairKey] ?? "";
-
-                            return (
-                              <article key={pairKey} className="ai-suggestion-row accepted-merge-suggestion">
-                                <span>
-                                  IA sugere mesclar: <strong>{firstWord.text}</strong> ↔ <strong>{secondWord.text}</strong>
-                                </span>
-
+                              {(word.aliases?.length ?? 0) > 0 && (
                                 <select
-                                  aria-label={`Escolher forma canônica para mesclar ${firstWord.text} e ${secondWord.text}`}
-                                  value={selectedCanonical}
-                                  onChange={(event) => {
-                                    const candidate = event.target.value;
-                                    setAcceptedMergeCanonicalSelections((current) => ({
-                                      ...current,
-                                      [pairKey]: candidate,
-                                    }));
-                                  }}
+                                  aria-label={`Escolher representação de ${word.text}`}
+                                  className="canonical-form-select"
+                                  onChange={(event) => void handleChooseCanonicalWordForm(word, event.target.value)}
+                                  value={word.text}
                                 >
-                                  <option value="" disabled>Escolher forma canônica...</option>
-                                  {candidates.map((candidate) => (
+                                  {getCanonicalWordCandidates(word.text, word.aliases).map((candidate) => (
                                     <option key={candidate} value={candidate}>{candidate}</option>
                                   ))}
                                 </select>
+                              )}
 
-                                <button
-                                  className="button"
-                                  disabled={!selectedCanonical}
-                                  onClick={() => handleMergeAcceptedWords(firstWord, secondWord, pairKey)}
-                                  type="button"
-                                >
-                                  Mesclar
-                                </button>
-                              </article>
+                              {editState.hasDraft && (
+                                <div className="accepted-word-edit-actions">
+                                  {editState.canConfirm && (
+                                    <button
+                                      className="button accepted-word-icon-action"
+                                      type="button"
+                                      aria-label={`Confirmar correção de ${word.text}`}
+                                      title="Confirmar correção"
+                                      onClick={() => void handleUpdateAcceptedWord(word, draft ?? word.text)}
+                                    >
+                                      <Check size={15} aria-hidden="true" />
+                                    </button>
+                                  )}
+                                  <button
+                                    className="button accepted-word-icon-action"
+                                    type="button"
+                                    aria-label={`Cancelar correção de ${word.text}`}
+                                    title="Cancelar correção"
+                                    onClick={() => setAcceptedWordDrafts((current) => {
+                                      const next = { ...current };
+                                      delete next[draftKey];
+                                      return next;
+                                    })}
+                                  >
+                                    <X size={15} aria-hidden="true" />
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+
+                            <span className="merge-count" title={word.aliases?.join(", ")}>
+                              (+{word.aliases?.length ?? 0})
+                            </span>
+                          </div>
+
+                          {visibleAcceptedMergeSuggestions
+                            .filter(({ firstWord }) => firstWord.id === word.id)
+                            .map(({ firstWord, secondWord, pairKey }) => {
+                              const candidates = getAcceptedMergeCanonicalCandidates(firstWord, secondWord);
+                              const selectedCanonical = acceptedMergeCanonicalSelections[pairKey] ?? "";
+
+                              return (
+                                <article key={pairKey} className="ai-suggestion-row accepted-merge-suggestion">
+                                  <span>
+                                    IA sugere mesclar: <strong>{firstWord.text}</strong> ↔ <strong>{secondWord.text}</strong>
+                                  </span>
+
+                                  <select
+                                    aria-label={`Escolher forma canônica para mesclar ${firstWord.text} e ${secondWord.text}`}
+                                    value={selectedCanonical}
+                                    onChange={(event) => {
+                                      const candidate = event.target.value;
+                                      setAcceptedMergeCanonicalSelections((current) => ({
+                                        ...current,
+                                        [pairKey]: candidate,
+                                      }));
+                                    }}
+                                  >
+                                    <option value="" disabled>Escolher forma canônica...</option>
+                                    {candidates.map((candidate) => (
+                                      <option key={candidate} value={candidate}>{candidate}</option>
+                                    ))}
+                                  </select>
+
+                                  <button
+                                    className="button"
+                                    disabled={!selectedCanonical}
+                                    onClick={() => handleMergeAcceptedWords(firstWord, secondWord, pairKey)}
+                                    type="button"
+                                  >
+                                    Mesclar
+                                  </button>
+                                </article>
                             );
                           })}
                       </div>
@@ -728,9 +826,72 @@ export default function SkyPanel() {
                         <X size={15} strokeWidth={2.4} />
                       </button>
                     </article>
-                  ))
+                    );
+                  })
                 )}
               </div>
+            </section>
+
+            <section className="clean-section" aria-labelledby="word-operation-history-title">
+              <div className="clean-section-title">
+                <h2 id="word-operation-history-title">Histórico de alterações</h2>
+              </div>
+              {wordOperations.length === 0 ? (
+                <p className="clean-empty">Ainda não há operações reversíveis nesta nuvem.</p>
+              ) : (
+                <ol className="word-operation-history">
+                  {wordOperations.map((operation) => {
+                    const label = operation.type === "pending_merge"
+                      ? "Mesclagem pela recepção"
+                      : operation.type === "manual_approval_aggregation"
+                        ? "Agregação ao aprovar uma ideia"
+                      : operation.type === "accepted_merge"
+                        ? "Mesclagem de ideias aceitas"
+                        : operation.type === "exact_match_aggregation"
+                          ? "Agregação automática por correspondência exata"
+                      : operation.type === "spelling_correction"
+                        ? "Correção ortográfica"
+                        : operation.type === "pending_rejection"
+                          ? "Recusa de submissão"
+                          : operation.type === "delete_word"
+                            ? "Remoção de palavra"
+                            : "Reversão de operação";
+                    const operationDate = typeof operation.createdAt === "string"
+                      ? new Date(operation.createdAt)
+                      : operation.createdAt && typeof operation.createdAt === "object" && "toDate" in operation.createdAt
+                        ? (operation.createdAt as { toDate: () => Date }).toDate()
+                        : null;
+                    const date = operationDate && !Number.isNaN(operationDate.getTime())
+                      ? operationDate.toLocaleString("pt-BR")
+                      : "Data indisponível";
+                    const canUndo = operation.status === "applied" && operation.type !== "undo";
+
+                    return (
+                      <li key={operation.id}>
+                        <span>
+                          {label} — {operation.actor === "exact_match_automation" ? "automática" : operation.actor === "undo" || operation.actor === "system_undo" ? "reversão" : "manual"} — {date}
+                          {operation.affectedWords.length > 0 && <small> {operation.affectedWords.join(" · ")}</small>}
+                        </span>
+                        {operation.status === "reversed" ? (
+                          <span>Desfeita</span>
+                        ) : canUndo ? (
+                          <button
+                            className="button"
+                            type="button"
+                            disabled={undoingOperationId !== null}
+                            aria-label={`Desfazer ${label}`}
+                            onClick={() => void handleUndoWordOperation(operation)}
+                          >
+                            {undoingOperationId === operation.id ? "Desfazendo..." : "Desfazer"}
+                          </button>
+                        ) : (
+                          <span>Reversão registrada</span>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ol>
+              )}
             </section>
           </>
         ) : (
@@ -847,7 +1008,7 @@ export default function SkyPanel() {
           )}
         </div>
 
-        {feedback && <p className="clean-feedback">{feedback}</p>}
+        {feedback && <p className="clean-feedback" role="status" aria-live="polite">{feedback}</p>}
       </section>
     </main>
   );
