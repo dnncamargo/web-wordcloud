@@ -1,6 +1,11 @@
 import "server-only";
 
 import { getOpenRouterApiKey, getOpenRouterModel } from "@/lib/ai/openRouterConfig";
+import {
+  normalizeExperimentalTriageResponse,
+  type NormalizationDiagnostics,
+  type NormalizationFailureCode,
+} from "@/lib/ai/triageStructuralNormalizer";
 import { MAX_ACCEPTED_MERGE_SUGGESTIONS } from "@/lib/ai/triage-contract";
 import type {
   AcceptedMergeSuggestion,
@@ -55,6 +60,11 @@ export type OpenRouterTriageFailureDiagnostic =
       validationReason?: never;
     });
 
+export type TriageEvaluatorOptions = Readonly<{
+  responseMode?: "strict" | "experimental-structural-recovery";
+  onStructuralRecovery?: (diagnostics: NormalizationDiagnostics) => void;
+}>;
+
 export class OpenRouterTriageError extends Error {
   readonly diagnostic: OpenRouterTriageFailureDiagnostic;
 
@@ -77,6 +87,17 @@ export function getOpenRouterTriageFailureDiagnostic(
 
 const OPENROUTER_CHAT_COMPLETIONS_URL =
   "https://openrouter.ai/api/v1/chat/completions";
+
+export const OPENROUTER_TRIAGE_REQUEST_OPTIONS = {
+  temperature: 0,
+  max_completion_tokens: 4096,
+  reasoning_effort: "none",
+  provider: {
+    zdr: true,
+    data_collection: "deny",
+    require_parameters: true,
+  },
+} as const;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -367,6 +388,71 @@ function validateResults(
   return { results, acceptedMergeSuggestions };
 }
 
+function normalizationFailureToError(
+  code: NormalizationFailureCode,
+  finishReason: OpenRouterTriageFailureDiagnostic["finishReason"],
+): OpenRouterTriageError {
+  switch (code) {
+    case "result_shape_invalid":
+      return new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "result_shape",
+        finishReason,
+      });
+    case "pending_id_duplicate":
+      return new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "pending_id_duplicate",
+        finishReason,
+      });
+    case "pending_id_invalid":
+      return new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "pending_id_invalid",
+        finishReason,
+      });
+    case "relevance_invalid":
+      return new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "relevance_invalid",
+        finishReason,
+      });
+    case "attention_invalid":
+      return new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "attention_invalid",
+        finishReason,
+      });
+    case "spelling_suggestion_invalid":
+      return new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "spelling_suggestion_invalid",
+        finishReason,
+      });
+    case "merge_suggestion_shape_invalid":
+    case "merge_id_invalid":
+      return new OpenRouterTriageError({
+        code: "provider_result_invalid",
+        validationReason: "accepted_merge_suggestion_invalid",
+        finishReason,
+      });
+    case "invalid_json":
+      return new OpenRouterTriageError({
+        code: "provider_structured_json_invalid",
+        finishReason,
+      });
+    case "invalid_expected_ids":
+    case "response_shape_invalid":
+    case "result_count_mismatch":
+    case "pending_id_missing":
+    case "merge_limit_exceeded":
+      return new OpenRouterTriageError({
+        code: "provider_result_incomplete",
+        finishReason,
+      });
+  }
+}
+
 function getFinishReason(
   choice: JsonRecord | undefined,
 ): OpenRouterTriageFailureDiagnostic["finishReason"] {
@@ -412,7 +498,11 @@ function readResponseContent(payload: unknown): {
   return { content: choice.message.content, finishReason };
 }
 
-export async function triagePendingWords(input: unknown): Promise<TriageResponse> {
+export async function triagePendingWordsForEvaluator(
+  input: unknown,
+  systemInstruction: string,
+  options: TriageEvaluatorOptions = {},
+): Promise<TriageResponse> {
   const validatedInput = validateInput(input);
 
   if (
@@ -431,14 +521,7 @@ export async function triagePendingWords(input: unknown): Promise<TriageResponse
   const model = getOpenRouterModel();
   const requestBody = {
     model,
-    temperature: 0,
-    max_completion_tokens: 4096,
-    reasoning_effort: "none",
-    provider: {
-      zdr: true,
-      data_collection: "deny",
-      require_parameters: true,
-    },
+    ...OPENROUTER_TRIAGE_REQUEST_OPTIONS,
     response_format: {
       type: "json_schema",
       json_schema: {
@@ -451,7 +534,7 @@ export async function triagePendingWords(input: unknown): Promise<TriageResponse
       },
     },
     messages: [
-      { role: "system", content: SYSTEM_INSTRUCTION },
+      { role: "system", content: systemInstruction },
       {
         role: "user",
         content: JSON.stringify({
@@ -500,10 +583,29 @@ export async function triagePendingWords(input: unknown): Promise<TriageResponse
     });
   }
 
+  if (options.responseMode === "experimental-structural-recovery") {
+    const normalized = normalizeExperimentalTriageResponse(
+      structuredContent,
+      validatedInput.pendingWords.map(({ id }) => id),
+      validatedInput.acceptedWords.map(({ id }) => id),
+    );
+
+    if (!normalized.ok) {
+      throw normalizationFailureToError(normalized.error.code, finishReason);
+    }
+
+    options.onStructuralRecovery?.(normalized.diagnostics);
+    return normalized.response;
+  }
+
   return validateResults(
     structuredContent,
     validatedInput.pendingWords,
     validatedInput.acceptedWords,
     finishReason,
   );
+}
+
+export async function triagePendingWords(input: unknown): Promise<TriageResponse> {
+  return triagePendingWordsForEvaluator(input, SYSTEM_INSTRUCTION);
 }

@@ -9,12 +9,14 @@
     "lint": "eslint",
     "ai:evaluate": "node --conditions=react-server --import tsx scripts/evaluate-ai-triage.ts",
     "ai:export-firestore": "node --conditions=react-server --import tsx scripts/export-firestore-calibration.ts",
-    "test:ai-guardrails": "node --conditions=react-server --import tsx --test tests/ai-guardrails.test.ts tests/ai-routes.test.ts tests/ai-sky-triage.test.ts"
+    "test:ai-guardrails": "node --conditions=react-server --import tsx --test tests/ai-guardrails.test.ts tests/ai-routes.test.ts tests/ai-sky-triage.test.ts",
+    "test:firebase-emulator": "firebase emulators:exec --project demo-web-wordcloud --only firestore \"node --conditions=react-server --import tsx --test tests/firestore-rules.test.ts tests/server-operations-emulator.test.ts tests/server-route.test.ts\""
   },
   "dependencies": {
     "@upstash/ratelimit": "2.2.0",
     "@upstash/redis": "1.39.0",
     "firebase": "^12.15.0",
+    "firebase-admin": "^13.10.0",
     "lucide-react": "^1.22.0",
     "next": "16.3.8",
     "react": "19.2.4",
@@ -22,6 +24,7 @@
     "server-only": "^0.0.1"
   },
   "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
